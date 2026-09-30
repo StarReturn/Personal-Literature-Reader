@@ -9,6 +9,7 @@ import router from './router'
 import './styles/ui-baseline.css'
 import './assets/main.css'
 import { initTheme } from './lib/theme'
+import { api } from './ipc'
 
 initTheme()
 
@@ -19,4 +20,20 @@ app.use(ElementPlus, { locale: zhCn })
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)
 }
-app.mount('#app')
+
+// 桌宠窗口（label=pet）加载同一个 SPA：挂载前引导到 /pet 路由，避免闪现主界面
+async function boot() {
+  if (api.isTauri && !location.hash) {
+    try {
+      const { getCurrent } = await import('@tauri-apps/api/window')
+      if (getCurrent().label === 'pet') {
+        location.hash = '#/pet'
+      }
+    } catch {
+      /* 非 pet 窗口 */
+    }
+  }
+  app.mount('#app')
+}
+
+void boot()

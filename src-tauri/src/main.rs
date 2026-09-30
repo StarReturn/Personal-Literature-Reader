@@ -6,6 +6,7 @@
 use litreview_core::db::CoreState;
 use litreview_core::model::*;
 use litreview_core::service as sv;
+use rusqlite::{params, OptionalExtension};
 use std::path::PathBuf;
 use tauri::ipc::Response;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -268,6 +269,87 @@ fn delete_annotation(state: State<'_, CoreState>, aid: i64) -> R<()> {
     sv::annotations::delete_annotation(&state, aid).map_err(cerr)
 }
 
+// ---------- 桌宠：配置存 meta 表，形象存 资料库/pets/current.<ext> ----------
+
+fn pet_meta_get(state: &CoreState, key: &str) -> Option<String> {
+    let inner = state.inner.lock().unwrap();
+    inner
+        .conn
+        .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0))
+        .optional()
+        .unwrap_or(None)
+}
+
+fn pet_meta_set(state: &CoreState, key: &str, value: &str) -> R<()> {
+    let inner = state.inner.lock().unwrap();
+    inner
+        .conn
+        .execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct PetConfig {
+    enabled: bool,
+    has_image: bool,
+    image_name: String,
+}
+
+#[tauri::command]
+fn pet_get_config(state: State<'_, CoreState>) -> R<PetConfig> {
+    let enabled = pet_meta_get(&state, "pet_enabled").as_deref() == Some("1");
+    let image_name = pet_meta_get(&state, "pet_image").unwrap_or_default();
+    let has_image = !image_name.is_empty()
+        && {
+            let inner = state.inner.lock().unwrap();
+            inner.library_dir.join("pets").join(&image_name).exists()
+        };
+    Ok(PetConfig { enabled, has_image, image_name })
+}
+
+#[tauri::command]
+fn pet_set_enabled(state: State<'_, CoreState>, enabled: bool) -> R<()> {
+    pet_meta_set(&state, "pet_enabled", if enabled { "1" } else { "0" })
+}
+
+/// 导入形象图片：复制到 资料库/pets/current.<ext>（原文件不动）。
+#[tauri::command]
+fn pet_set_image(state: State<'_, CoreState>, bytes: Vec<u8>, ext: String) -> R<()> {
+    let ext = ext.to_lowercase();
+    let name = match ext.as_str() {
+        "png" => "current.png".to_string(),
+        "jpg" | "jpeg" => "current.jpg".to_string(),
+        "webp" => "current.webp".to_string(),
+        "gif" => "current.gif".to_string(),
+        _ => "current.png".to_string(),
+    };
+    let inner = state.inner.lock().unwrap();
+    let dir = inner.library_dir.join("pets");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(&name), bytes).map_err(|e| e.to_string())?;
+    drop(inner);
+    pet_meta_set(&state, "pet_image", &name)
+}
+
+#[tauri::command]
+fn pet_get_image(state: State<'_, CoreState>) -> R<Option<Vec<u8>>> {
+    let name = pet_meta_get(&state, "pet_image").unwrap_or_default();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let inner = state.inner.lock().unwrap();
+    let path = inner.library_dir.join("pets").join(&name);
+    drop(inner);
+    match std::fs::read(path) {
+        Ok(b) => Ok(Some(b)),
+        Err(_) => Ok(None),
+    }
+}
+
 #[tauri::command]
 fn get_template() -> serde_json::Value {
     serde_json::json!({
@@ -341,6 +423,7 @@ fn main() {
             delete_tag, list_compares, create_compare, get_compare, update_compare,
             delete_compare, export_compare, backup, restore, get_settings, switch_library,
             get_template, list_annotations, add_annotation, update_annotation, delete_annotation,
+            pet_get_config, pet_set_enabled, pet_set_image, pet_get_image,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用失败");

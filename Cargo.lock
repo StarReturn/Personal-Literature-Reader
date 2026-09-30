@@ -2166,6 +2166,7 @@ name = "litreview-app"
 version = "0.1.0"
 dependencies = [
  "litreview-core",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",

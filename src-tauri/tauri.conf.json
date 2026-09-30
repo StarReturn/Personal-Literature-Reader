@@ -18,6 +18,23 @@
         "minWidth": 1024,
         "minHeight": 700,
         "center": true
+      },
+      {
+        "label": "pet",
+        "title": "pet",
+        "url": "index.html",
+        "width": 220,
+        "height": 240,
+        "x": 1200,
+        "y": 560,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "center": false
       }
     ],
     "security": {
@@ -26,7 +43,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico"]
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ]
   }
 }

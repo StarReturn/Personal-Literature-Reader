@@ -18,6 +18,61 @@ const restoreDir = ref('')
 const lastBackup = ref('')
 const activeTheme = ref(getCurrentThemeId())
 
+// 桌宠（仅桌面版）
+const petEnabled = ref(false)
+const petHasImage = ref(false)
+const petLoading = ref(false)
+
+async function loadPet() {
+  if (!api.isTauri) return
+  try {
+    const cfg = await api.petGetConfig()
+    if (cfg) {
+      petEnabled.value = cfg.enabled
+      petHasImage.value = cfg.has_image
+    }
+  } catch {
+    /* 忽略 */
+  }
+}
+
+async function togglePet(v: boolean) {
+  petEnabled.value = v
+  try {
+    await api.petSetEnabled(v)
+    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+    const win = WebviewWindow.getByLabel('pet')
+    if (win) {
+      if (v) await win.show()
+      else await win.hide()
+    }
+    toastOk(v ? '桌宠已开启（可在桌面拖动它）' : '桌宠已关闭')
+  } catch (e) {
+    toastError(String((e as Error).message || e))
+  }
+}
+
+async function importPetImage() {
+  try {
+    const r = await api.pickFile(['png', 'jpg', 'jpeg', 'webp', 'gif'])
+    if (!r?.file) {
+      toastInfo('浏览器无法读取本地图片路径，请在桌面版中导入形象')
+      return
+    }
+    await api.petSetImage(r.file)
+    petHasImage.value = true
+    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+    const win = WebviewWindow.getByLabel('pet')
+    if (win && petEnabled.value) {
+      await win.hide()
+      await win.show()
+    }
+    toastOk('形象已更新')
+  } catch (e) {
+    toastError(String((e as Error).message || e))
+  }
+}
+
 function onPickTheme(id: string) {
   const preset = selectTheme(id)
   activeTheme.value = preset.id
@@ -25,7 +80,10 @@ function onPickTheme(id: string) {
 }
 
 watch(visible, (v) => {
-  if (v) load()
+  if (v) {
+    load()
+    loadPet()
+  }
 })
 
 async function load() {
@@ -99,6 +157,19 @@ async function downloadTemplate() {
 <template>
   <el-dialog v-model="visible" title="设置与备份" width="min(780px, 92vw)" :close-on-click-modal="false" destroy-on-close>
     <!-- 主题色 -->
+    <!-- 桌宠（仅桌面版） -->
+    <template v-if="api.isTauri">
+      <div class="section-title">桌宠</div>
+      <div class="pet-row">
+        <el-switch v-model="petEnabled" :loading="petLoading" @change="togglePet" />
+        <span class="pet-hint">开启后桌宠常驻桌面（拖动移动、单击互动、双击回主界面）</span>
+        <el-button size="small" style="margin-left: auto" @click="importPetImage">
+          {{ petHasImage ? '更换形象图片' : '导入形象图片' }}
+        </el-button>
+      </div>
+      <p class="hint">形象可用任意 AI 生成的透明底 PNG（应用默认使用小兔子）；形象文件保存在资料库 pets 目录，随备份迁移。</p>
+    </template>
+
     <div class="section-title">主题色</div>
     <div class="theme-grid">
       <button
@@ -276,6 +347,18 @@ async function downloadTemplate() {
   font-size: 12px;
   color: #6a737d;
   margin: 2px 0 6px;
+}
+
+.pet-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.pet-hint {
+  font-size: 12.5px;
+  color: #4b5058;
 }
 
 .hint {
