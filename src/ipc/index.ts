@@ -534,6 +534,12 @@ export const api = {
     return tauriInvoke('pet_set_image', { bytes: Array.from(bytes), ext })
   },
 
+  /** 桌面模式：按对话框返回的路径导入形象。 */
+  async petSetImagePath(path: string): Promise<void> {
+    if (!isTauri) return
+    return tauriInvoke('pet_set_image_path', { path })
+  },
+
   async petGetImage(): Promise<Uint8Array | null> {
     if (!isTauri) return null
     const r = await tauriInvoke<number[]>('pet_get_image')

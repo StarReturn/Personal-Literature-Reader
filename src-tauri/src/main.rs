@@ -316,6 +316,14 @@ fn pet_set_enabled(state: State<'_, CoreState>, enabled: bool) -> R<()> {
     pet_meta_set(&state, "pet_enabled", if enabled { "1" } else { "0" })
 }
 
+/// 桌面模式：按对话框返回的路径读图并导入（前端拿不到本地文件内容）。
+#[tauri::command]
+fn pet_set_image_path(state: State<'_, CoreState>, path: String) -> R<()> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取图片失败：{e}"))?;
+    let ext = path.rsplit('.').next().unwrap_or("png").to_lowercase();
+    pet_set_image(state, bytes, ext)
+}
+
 /// 导入形象图片：复制到 资料库/pets/current.<ext>（原文件不动）。
 #[tauri::command]
 fn pet_set_image(state: State<'_, CoreState>, bytes: Vec<u8>, ext: String) -> R<()> {
@@ -423,7 +431,7 @@ fn main() {
             delete_tag, list_compares, create_compare, get_compare, update_compare,
             delete_compare, export_compare, backup, restore, get_settings, switch_library,
             get_template, list_annotations, add_annotation, update_annotation, delete_annotation,
-            pet_get_config, pet_set_enabled, pet_set_image, pet_get_image,
+            pet_get_config, pet_set_enabled, pet_set_image, pet_set_image_path, pet_get_image,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用失败");

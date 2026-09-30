@@ -56,18 +56,13 @@ function scheduleSleep() {
 }
 
 async function openMain() {
-  const { getCurrent } = await import('@tauri-apps/api/window')
-  const main = await import('@tauri-apps/api/webviewWindow').then((m) => m.WebviewWindow)
-  const win = main.getByLabel('main')
+  const { Window } = await import('@tauri-apps/api/window')
+  const win = Window.getByLabel('main')
   if (win) {
     await win.show()
     await win.unminimize()
     await win.setFocus()
-  } else {
-    // 主窗口不存在时由新建兜底
-    new main('main', { url: 'index.html' })
   }
-  void getCurrent
 }
 
 async function loadPetImage() {

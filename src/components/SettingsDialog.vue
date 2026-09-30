@@ -40,8 +40,9 @@ async function togglePet(v: boolean) {
   petEnabled.value = v
   try {
     await api.petSetEnabled(v)
-    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
-    const win = WebviewWindow.getByLabel('pet')
+    // 注意：show/hide 是 Window 类方法；WebviewWindow.getByLabel 返回 Webview 实例没有这些方法
+    const { Window } = await import('@tauri-apps/api/window')
+    const win = Window.getByLabel('pet')
     if (win) {
       if (v) await win.show()
       else await win.hide()
@@ -55,14 +56,19 @@ async function togglePet(v: boolean) {
 async function importPetImage() {
   try {
     const r = await api.pickFile(['png', 'jpg', 'jpeg', 'webp', 'gif'])
-    if (!r?.file) {
-      toastInfo('浏览器无法读取本地图片路径，请在桌面版中导入形象')
+    if (!r) return // 用户取消
+    if (r.path) {
+      // 桌面模式：对话框返回路径，由后端读文件
+      await api.petSetImagePath(r.path)
+    } else if (r.file) {
+      // 浏览器模式：File 对象（仅调试用，正式入口在桌面版）
+      await api.petSetImage(r.file)
+    } else {
       return
     }
-    await api.petSetImage(r.file)
     petHasImage.value = true
-    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
-    const win = WebviewWindow.getByLabel('pet')
+    const { Window } = await import('@tauri-apps/api/window')
+    const win = Window.getByLabel('pet')
     if (win && petEnabled.value) {
       await win.hide()
       await win.show()
