@@ -511,6 +511,52 @@ export const api = {
     return null
   },
 
+  getTemplate(): Promise<{ filename: string; content: string }> {
+    if (isTauri) return tauriInvoke('get_template')
+    return httpJson('GET', '/api/template')
+  },
+
+  // ---------- 桌宠（仅桌面 Tauri 模式） ----------
+  async petGetConfig(): Promise<{ enabled: boolean; has_image: boolean; image_name: string } | null> {
+    if (!isTauri) return null
+    return tauriInvoke('pet_get_config')
+  },
+
+  async petSetEnabled(enabled: boolean): Promise<void> {
+    if (!isTauri) return
+    return tauriInvoke('pet_set_enabled', { enabled })
+  },
+
+  async petSetImage(file: File): Promise<void> {
+    if (!isTauri) return
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const ext = (file.name.split('.').pop() || 'png').toLowerCase()
+    return tauriInvoke('pet_set_image', { bytes: Array.from(bytes), ext })
+  },
+
+  async petGetImage(): Promise<Uint8Array | null> {
+    if (!isTauri) return null
+    const r = await tauriInvoke<number[]>('pet_get_image')
+    return r && r.length ? new Uint8Array(r) : null
+  },
+
+  /** 保存文本文件：桌面模式弹出另存为写磁盘；浏览器模式触发下载。 */
+  async saveText(filename: string, content: string): Promise<void> {
+    if (isTauri) {
+      const { save } = await import('@tauri-apps/plugin-dialog')
+      const path = await save({ defaultPath: filename })
+      if (!path) return
+      return tauriInvoke('save_text_file', { path, content })
+    }
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
   /** 选择目录。桌面模式返回路径；浏览器模式返回 null（由用户手动输入路径）。 */
   async pickDir(): Promise<string | null> {
     if (isTauri) {
