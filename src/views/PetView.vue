@@ -6,7 +6,8 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '../ipc'
 import logoUrl from '../assets/logo.png'
 
-const imageURL = ref<string>(logoUrl)
+// 默认形象：随应用内置的橘猫（public/ 静态资源）；加载失败回退应用 logo
+const imageURL = ref<string>('/desktop-pet/ginger-tabby-portrait.png')
 const bubble = ref<string | null>(null)
 const bouncing = ref(false)
 const sleeping = ref(false)
@@ -77,8 +78,12 @@ async function loadPetImage() {
       imageURL.value = URL.createObjectURL(blob)
     }
   } catch {
-    // 读取失败保持默认 logo
+    // 读取失败使用默认形象
   }
+}
+
+function fallbackToLogo() {
+  imageURL.value = logoUrl
 }
 
 function onActivity() {
@@ -110,7 +115,7 @@ onBeforeUnmount(() => {
       @click="poke"
       @dblclick="openMain"
     >
-      <img :src="imageURL" alt="桌宠" draggable="false" />
+      <img :src="imageURL" alt="桌宠" draggable="false" @error="fallbackToLogo" />
     </div>
     <div v-if="sleeping" class="pet-zzz">💤</div>
   </div>
