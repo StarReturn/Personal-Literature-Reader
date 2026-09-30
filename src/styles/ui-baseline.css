@@ -1,0 +1,169 @@
+/* ============================================================
+   ui-baseline.css — 无 UI 库时的前端审美下限基线
+   用法：整份引入一次（<link> 或 import），页面直接使用其中的类。
+   项目已引入 UI 库（Element/AntD/MUI…）时不要使用本文件。
+   设计原则：改 :root 变量即可整站换肤；间距只用 4/8 的倍数；
+   控件永不拉伸；层级只用三档；所有交互有 150ms 反馈。
+   ============================================================ */
+
+/* ---------- 1. Design Tokens ---------- */
+:root {
+  /* 色彩 */
+  --c-bg: #f5f6f8;
+  --c-surface: #ffffff;
+  --c-border: #e5e7eb;
+  --c-text-1: #1f2329;   /* 主文本 */
+  --c-text-2: #646a73;   /* 次文本 */
+  --c-text-3: #8f959e;   /* 弱文本/占位 */
+  --c-primary: #3370ff;
+  --c-primary-hover: #2b5fd9;
+  --c-primary-active: #2455c0;
+  --c-primary-bg: #eaf1ff;
+  --c-danger: #d83931;
+  --c-danger-hover: #b92f28;
+  --c-success: #2ea121;
+  --c-warning: #ff8800;
+
+  /* 间距（只允许 4/8 的倍数） */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* 字号三级 */
+  --fs-1: 20px;  /* 页面标题 */
+  --fs-2: 14px;  /* 正文，全局默认 */
+  --fs-3: 12px;  /* 辅助说明 */
+
+  /* 圆角 / 阴影 / 层级（三档，禁止其它 z-index）/ 动效 */
+  --radius: 6px;
+  --shadow-1: 0 1px 2px rgba(31, 35, 41, .06), 0 2px 8px rgba(31, 35, 41, .08);
+  --shadow-2: 0 8px 24px rgba(31, 35, 41, .16);
+  --z-dropdown: 100;
+  --z-modal: 200;
+  --z-toast: 300;
+  --transition: 150ms ease;
+}
+
+/* ---------- 2. 全局复位 ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  color: var(--c-text-1);
+  background: var(--c-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- 3. 布局原语 ---------- */
+.page { max-width: 1200px; margin: 0 auto; padding: var(--sp-5); }
+
+/* align-items:center：防止子控件被 flex 默认 stretch 拉满宽 —— 按钮横跨全屏的头号防线 */
+.flex { display: flex; align-items: center; gap: var(--sp-2); }
+.flex--between { justify-content: space-between; }
+.stack { display: grid; gap: var(--sp-3); }
+
+.page-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-2); margin-bottom: var(--sp-4);
+}
+.page-title { margin: 0; font-size: var(--fs-1); font-weight: 600; }
+
+/* ---------- 4. 按钮（保持内容宽度，永不被拉伸） ---------- */
+.btn {
+  flex: none;  /* flex 子项中不被拉伸 */
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-1);
+  padding: 7px 16px;
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  background: var(--c-surface); color: var(--c-text-1);
+  font-size: var(--fs-2); line-height: 1.5; white-space: nowrap;
+  cursor: pointer; user-select: none;
+  transition: background var(--transition), border-color var(--transition),
+              color var(--transition), transform var(--transition);
+}
+.btn:hover { border-color: var(--c-primary); color: var(--c-primary); }
+.btn:active { transform: scale(.97); }
+.btn:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 2px; }
+.btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.btn--primary { background: var(--c-primary); border-color: var(--c-primary); color: #fff; }
+.btn--primary:hover { background: var(--c-primary-hover); border-color: var(--c-primary-hover); color: #fff; }
+.btn--primary:active { background: var(--c-primary-active); }
+.btn--danger { color: var(--c-danger); }
+.btn--danger:hover { border-color: var(--c-danger); color: var(--c-danger); }
+.btn--text { border-color: transparent; background: transparent; }
+.btn--text:hover { background: var(--c-primary-bg); }
+.btn--sm { padding: 3px 10px; font-size: var(--fs-3); }
+
+/* ---------- 5. 表单 ---------- */
+.input, .select {
+  flex: none; min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  font-size: var(--fs-2); color: var(--c-text-1); background: var(--c-surface);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.input:hover, .select:hover { border-color: #c4c9d0; }
+.input:focus, .select:focus { outline: none; border-color: var(--c-primary); box-shadow: 0 0 0 2px var(--c-primary-bg); }
+.input::placeholder { color: var(--c-text-3); }
+.input[disabled], .select[disabled] { background: var(--c-bg); cursor: not-allowed; }
+
+.form-item { display: grid; gap: var(--sp-1); }
+.form-label { font-size: var(--fs-2); color: var(--c-text-2); }
+.form-required::before { content: "*"; color: var(--c-danger); margin-right: var(--sp-1); }
+
+/* ---------- 6. 表格（溢出横滚，不撑破容器） ---------- */
+.table-wrap { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius); overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; min-width: 640px; }
+.table th, .table td { padding: 10px var(--sp-3); text-align: left; border-bottom: 1px solid var(--c-border); white-space: nowrap; }
+.table td.ellipsis { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.table th { font-weight: 500; color: var(--c-text-2); background: #fafbfc; }
+.table tbody tr { transition: background var(--transition); }
+.table tbody tr:hover { background: #f7f9fc; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------- 7. 弹窗（浮层：fixed + 三档 z-index） ---------- */
+.mask {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: rgba(31, 35, 41, .45);
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--sp-5);
+}
+.modal { width: 480px; max-width: 100%; max-height: 84vh; overflow: auto;
+  background: var(--c-surface); border-radius: 8px; box-shadow: var(--shadow-2); }
+.modal-header { display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--c-border); }
+.modal-title { margin: 0; font-size: var(--fs-1); font-weight: 600; }
+.modal-body { padding: var(--sp-5); display: grid; gap: var(--sp-4); }
+.modal-footer { display: flex; justify-content: flex-end; gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-5); border-top: 1px solid var(--c-border); }
+
+/* ---------- 8. 轻提示 ---------- */
+.toast-wrap {
+  position: fixed; top: var(--sp-5); left: 50%; transform: translateX(-50%);
+  z-index: var(--z-toast); display: grid; gap: var(--sp-2); justify-items: center;
+}
+.toast { padding: 9px var(--sp-4); border-radius: var(--radius);
+  background: var(--c-surface); box-shadow: var(--shadow-2); font-size: var(--fs-2); }
+.toast--success { color: var(--c-success); }
+.toast--error { color: var(--c-danger); }
+
+/* ---------- 9. 空态 / 加载态（列表页三态必备） ---------- */
+.empty { display: grid; justify-items: center; gap: var(--sp-3);
+  padding: 64px var(--sp-5); color: var(--c-text-3); }
+.empty p { margin: 0; }
+.skeleton { height: 16px; border-radius: var(--radius);
+  background: linear-gradient(90deg, #eef0f3 25%, #f7f8fa 45%, #eef0f3 65%);
+  background-size: 200% 100%; animation: skeleton 1.2s infinite; }
+@keyframes skeleton { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* ---------- 10. 徽标（状态列常用） ---------- */
+.tag { display: inline-block; padding: 1px var(--sp-2); border-radius: 4px;
+  font-size: var(--fs-3); background: var(--c-bg); color: var(--c-text-2); }
+.tag--success { background: #e8f7e6; color: var(--c-success); }
+.tag--danger  { background: #fdecec; color: var(--c-danger); }
+.tag--warning { background: #fff3e5; color: var(--c-warning); }

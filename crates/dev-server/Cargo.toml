@@ -1,0 +1,12 @@
+[package]
+name = "litreview-dev-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+litreview-core = { path = "../core" }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "tokio", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tower-http = { version = "0.6", features = ["fs"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

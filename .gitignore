@@ -1,0 +1,14 @@
+node_modules/
+dist/
+target/
+data/
+tmp_vendor/
+*.log
+.DS_Store
+
+# tauri 构建生成的 schema
+src-tauri/gen/schemas/
+
+# 构建产物（EXE 不入库，用 npm run tauri build 现打）
+*.exe
+*.exe.bak

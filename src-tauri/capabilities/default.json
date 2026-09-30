@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/capability/v2",
+  "identifier": "default",
+  "description": "主窗口默认能力",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "dialog:allow-ask",
+    "dialog:allow-confirm"
+  ]
+}
