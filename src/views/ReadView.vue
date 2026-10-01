@@ -5,7 +5,7 @@
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Crop, Download, Edit, Memo, Minus, Plus, RefreshRight, Select as SelectTool } from '@element-plus/icons-vue'
+import { ArrowLeft, Crop, Download, Edit, Hide, Memo, Minus, Plus, RefreshRight, Select as SelectTool } from '@element-plus/icons-vue'
 import { api, type AnalysisResponse, type EvidenceRecord, type PaperDetail, type PdfAnnotation } from '../ipc'
 import { confirmAction, toastError, toastInfo, toastOk } from '../lib/toast'
 import { anchorHash, stripFrontMatter } from '../lib/markdown'
@@ -59,7 +59,7 @@ const COLOR_HEX: Record<string, string> = {
 const COLOR_TITLE: Record<string, string> = { yellow: '黄 · 重点', red: '红 · 质疑', blue: '蓝 · 同意', green: '绿 · 待查' }
 const KIND_LABEL: Record<string, string> = { highlight: '高亮', rect: '框选', note: '便签' }
 
-const annoTool = ref<'select' | 'rect'>('select')
+const annoTool = ref<'off' | 'select' | 'rect'>('off')
 const annoColor = ref<(typeof ANNO_COLORS)[number]>('yellow')
 const annotations = ref<PdfAnnotation[]>([])
 const drawing = ref<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -265,18 +265,24 @@ async function renderPage() {
   rendering.value = true
   try {
     const page = await doc.getPage(Math.min(pageNum.value, doc.numPages))
-    const viewport = page.getViewport({ scale: zoom.value })
-    canvas.width = Math.floor(viewport.width)
-    canvas.height = Math.floor(viewport.height)
-    canvas.style.width = `${canvas.width}px`
-    canvas.style.height = `${canvas.height}px`
-    canvasW.value = canvas.width
-    canvasH.value = canvas.height
+    // 高 DPI 清晰渲染：canvas 按物理像素绘制（CSS 尺寸不变，位图放大 DPR 倍），
+    // 否则在 125%/150% 缩放屏上位图被拉伸发虚
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5)
+    const cssViewport = page.getViewport({ scale: zoom.value })
+    const renderViewport = page.getViewport({ scale: zoom.value * dpr })
+    const cssW = Math.floor(cssViewport.width)
+    const cssH = Math.floor(cssViewport.height)
+    canvas.width = Math.floor(renderViewport.width)
+    canvas.height = Math.floor(renderViewport.height)
+    canvas.style.width = `${cssW}px`
+    canvas.style.height = `${cssH}px`
+    canvasW.value = cssW
+    canvasH.value = cssH
     await page.render({
       canvasContext: canvas.getContext('2d')!,
-      viewport
+      viewport: renderViewport
     }).promise
-    await renderTextLayerNow(page, viewport)
+    await renderTextLayerNow(page, cssViewport)
   } finally {
     rendering.value = false
   }
@@ -620,7 +626,16 @@ watch(mode, (m) => {
             <span>/ {{ pageCount || '…' }}</span>
           </span>
           <el-divider direction="vertical" />
-          <!-- 批注工具 -->
+          <!-- 批注工具：默认关闭，手动开启 -->
+          <el-tooltip content="关闭批注（纯阅读，不响应选中与框选）" placement="bottom" :show-after="400">
+            <el-button
+              size="small"
+              :type="annoTool === 'off' ? 'primary' : ''"
+              :icon="Hide"
+              aria-label="关闭批注"
+              @click="annoTool = 'off'"
+            />
+          </el-tooltip>
           <el-tooltip content="选择文字（松开鼠标即按当前颜色生成高亮批注）" placement="bottom" :show-after="400">
             <el-button
               size="small"
@@ -639,7 +654,7 @@ watch(mode, (m) => {
               @click="annoTool = 'rect'"
             />
           </el-tooltip>
-          <span class="color-swatches">
+          <span v-if="annoTool !== 'off'" class="color-swatches">
             <span
               v-for="c in ANNO_COLORS"
               :key="c"
@@ -675,7 +690,7 @@ watch(mode, (m) => {
             v-show="!pdfError"
             ref="pdfStageRef"
             class="pdf-stage"
-            :class="{ 'tool-rect': annoTool === 'rect' }"
+            :class="{ 'tool-rect': annoTool === 'rect', 'anno-off': annoTool === 'off' }"
             @mouseup="captureSelection"
           >
             <canvas ref="canvasRef" class="pdf-canvas"></canvas>
@@ -1046,10 +1061,10 @@ watch(mode, (m) => {
 .pdf-scroll {
   flex: 1;
   overflow: auto;
-  background: #525659;
+  background: linear-gradient(180deg, #494d52 0%, #3f4348 100%);
   display: flex;
   justify-content: center;
-  padding: 16px 8px;
+  padding: 18px 10px;
 }
 
 .pdf-stage {
@@ -1060,11 +1075,17 @@ watch(mode, (m) => {
 .pdf-canvas {
   display: block;
   background: #fff;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 3px 16px rgba(0, 0, 0, 0.42), 0 1px 4px rgba(0, 0, 0, 0.3);
+  border-radius: 2px;
 }
 
 .tool-rect {
   cursor: crosshair;
+}
+
+/* 批注关闭：隐藏文字层，纯净阅读 */
+.anno-off .textLayer {
+  display: none;
 }
 
 /* 批注层：默认穿透（子元素可点），矩形模式整层拦截 */
