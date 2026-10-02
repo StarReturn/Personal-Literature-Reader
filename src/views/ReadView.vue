@@ -42,7 +42,12 @@ const zoom = ref(1.0)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const textLayerRef = ref<HTMLDivElement | null>(null)
 const pdfStageRef = ref<HTMLDivElement | null>(null)
+const pdfScrollRef = ref<HTMLDivElement | null>(null)
 const rendering = ref(false)
+let renderQueued = false
+let scrollAfterPageChange: 'top' | 'bottom' | null = null
+let nextWheelFlipAt = 0
+let touchStart: { y: number; atTop: boolean; atBottom: boolean } | null = null
 const canvasW = ref(0)
 const canvasH = ref(0)
 
@@ -261,15 +266,21 @@ async function loadPdf() {
 async function renderPage() {
   const doc = pdfDoc.value
   const canvas = canvasRef.value
-  if (!doc || !canvas || rendering.value) return
+  if (!doc || !canvas) return
+  if (rendering.value) {
+    renderQueued = true
+    return
+  }
   rendering.value = true
+  const renderedPage = pageNum.value
+  const renderedZoom = zoom.value
   try {
-    const page = await doc.getPage(Math.min(pageNum.value, doc.numPages))
+    const page = await doc.getPage(Math.min(renderedPage, doc.numPages))
     // 高 DPI 清晰渲染：canvas 按物理像素绘制（CSS 尺寸不变，位图放大 DPR 倍），
     // 否则在 125%/150% 缩放屏上位图被拉伸发虚
     const dpr = Math.min(window.devicePixelRatio || 1, 2.5)
-    const cssViewport = page.getViewport({ scale: zoom.value })
-    const renderViewport = page.getViewport({ scale: zoom.value * dpr })
+    const cssViewport = page.getViewport({ scale: renderedZoom })
+    const renderViewport = page.getViewport({ scale: renderedZoom * dpr })
     const cssW = Math.floor(cssViewport.width)
     const cssH = Math.floor(cssViewport.height)
     canvas.width = Math.floor(renderViewport.width)
@@ -283,8 +294,17 @@ async function renderPage() {
       viewport: renderViewport
     }).promise
     await renderTextLayerNow(page, cssViewport)
+    if (renderedPage === pageNum.value && renderedZoom === zoom.value && scrollAfterPageChange) {
+      const scroll = pdfScrollRef.value
+      if (scroll) scroll.scrollTop = scrollAfterPageChange === 'bottom' ? scroll.scrollHeight : 0
+      scrollAfterPageChange = null
+    }
   } finally {
     rendering.value = false
+    if (renderQueued || renderedPage !== pageNum.value || renderedZoom !== zoom.value) {
+      renderQueued = false
+      void renderPage()
+    }
   }
 }
 
@@ -325,9 +345,55 @@ function gotoPage(p: number) {
   if (mode.value === 'md') mode.value = 'split'
 }
 
-watch([pageNum, zoom], () => {
+function flipFromScroll(direction: 1 | -1) {
+  if (!pdfDoc.value || rendering.value || pdfLoading.value) return false
+  const target = pageNum.value + direction
+  if (target < 1 || target > pdfDoc.value.numPages) return false
+  scrollAfterPageChange = direction === 1 ? 'top' : 'bottom'
+  pageNum.value = target
+  return true
+}
+
+function onPdfWheel(event: WheelEvent) {
+  if (event.ctrlKey || !event.deltaY) return
+  const scroll = pdfScrollRef.value
+  if (!scroll) return
+  const atTop = scroll.scrollTop <= 2
+  const atBottom = scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 2
+  if (!(event.deltaY > 0 ? atBottom : atTop)) return
+  if (performance.now() < nextWheelFlipAt) {
+    event.preventDefault()
+    return
+  }
+  if (flipFromScroll(event.deltaY > 0 ? 1 : -1)) {
+    event.preventDefault()
+    nextWheelFlipAt = performance.now() + 500
+  }
+}
+
+function onPdfTouchStart(event: TouchEvent) {
+  const scroll = pdfScrollRef.value
+  if (!scroll || event.touches.length !== 1) return
+  touchStart = {
+    y: event.touches[0].clientY,
+    atTop: scroll.scrollTop <= 2,
+    atBottom: scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 2
+  }
+}
+
+function onPdfTouchEnd(event: TouchEvent) {
+  if (!touchStart || event.changedTouches.length !== 1) return
+  const distance = event.changedTouches[0].clientY - touchStart.y
+  if (distance < -45 && touchStart.atBottom) flipFromScroll(1)
+  if (distance > 45 && touchStart.atTop) flipFromScroll(-1)
+  touchStart = null
+}
+
+watch(pageNum, () => {
+  scrollAfterPageChange ??= 'top'
   renderPage()
 })
+watch(zoom, renderPage)
 
 watch(pageNum, (p) => {
   if (paper.value && paper.value.reading_status === 'to_read') {
@@ -529,7 +595,7 @@ async function exportThis() {
 }
 
 // ---------- 分栏拖拽 ----------
-const splitRatio = ref(0.52)
+const splitRatio = ref(0.6)
 const splitContainer = ref<HTMLElement | null>(null)
 let dragging = false
 
@@ -597,7 +663,7 @@ watch(mode, (m) => {
       </div>
       <div class="header-right">
         <el-button :icon="Download" @click="exportThis">导出</el-button>
-        <el-button type="primary" :icon="Plus" @click="addToCompare">加入对比</el-button>
+        <el-button :icon="Plus" @click="addToCompare">加入对比</el-button>
       </div>
     </header>
 
@@ -676,7 +742,7 @@ watch(mode, (m) => {
             <el-button :icon="RefreshRight" @click="zoom = 1" />
           </el-button-group>
         </div>
-        <div class="pdf-scroll" v-loading="pdfLoading" element-loading-text="PDF 加载中…">
+        <div ref="pdfScrollRef" class="pdf-scroll" v-loading="pdfLoading" element-loading-text="PDF 加载中…" @wheel="onPdfWheel" @touchstart="onPdfTouchStart" @touchend="onPdfTouchEnd">
           <el-alert
             v-if="pdfError"
             type="error"
@@ -926,9 +992,9 @@ watch(mode, (m) => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 8px 16px;
-  background: #fff;
-  border-bottom: 1px solid #e6e9ef;
+  padding: 12px 20px;
+  background: var(--app-surface);
+  border-bottom: 1px solid var(--app-line);
 }
 
 .header-left {
@@ -941,7 +1007,7 @@ watch(mode, (m) => {
 
 .paper-title {
   font-weight: 600;
-  font-size: 15px;
+  font-size: 16px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -979,9 +1045,9 @@ watch(mode, (m) => {
 
 .divider {
   flex: none;
-  width: 5px;
+  width: 4px;
   cursor: col-resize;
-  background: #e6e9ef;
+  background: var(--app-line);
   transition: background 0.15s;
 }
 
@@ -994,9 +1060,21 @@ watch(mode, (m) => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  border-bottom: 1px solid #e6e9ef;
-  background: #fff;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--app-line);
+  background: var(--app-surface);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.pdf-toolbar > :not(.toolbar-spacer),
+.pdf-toolbar :deep(.el-button-group),
+.pdf-toolbar :deep(.el-button) {
+  flex: none;
+}
+
+.pdf-toolbar :deep(.el-button-group) {
+  display: inline-flex;
 }
 
 .flip-h :deep(.el-icon) {
@@ -1012,7 +1090,7 @@ watch(mode, (m) => {
   align-items: center;
   gap: 6px;
   font-variant-numeric: tabular-nums;
-  color: #8f959e;
+  color: var(--app-muted);
   font-size: 13px;
 }
 
@@ -1061,10 +1139,10 @@ watch(mode, (m) => {
 .pdf-scroll {
   flex: 1;
   overflow: auto;
-  background: linear-gradient(180deg, #494d52 0%, #3f4348 100%);
+  background: #e9ecee;
   display: flex;
   justify-content: center;
-  padding: 18px 10px;
+  padding: 24px 16px;
 }
 
 .pdf-stage {
@@ -1075,8 +1153,7 @@ watch(mode, (m) => {
 .pdf-canvas {
   display: block;
   background: #fff;
-  box-shadow: 0 3px 16px rgba(0, 0, 0, 0.42), 0 1px 4px rgba(0, 0, 0, 0.3);
-  border-radius: 2px;
+  box-shadow: 0 2px 12px rgba(30, 43, 54, 0.16);
 }
 
 .tool-rect {
@@ -1267,7 +1344,7 @@ watch(mode, (m) => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #fff;
+  background: var(--app-surface);
   position: relative;
 }
 
@@ -1291,7 +1368,12 @@ watch(mode, (m) => {
 .right-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px 60px;
+  padding: 20px 24px 60px;
+}
+
+.right-scroll :deep(.md-body) {
+  font-size: 15px;
+  line-height: 1.75;
 }
 
 .mb {
@@ -1347,6 +1429,17 @@ watch(mode, (m) => {
   font-family: Consolas, 'Microsoft YaHei', monospace;
   font-size: 13px;
   line-height: 1.6;
+}
+
+@media (max-width: 1100px) {
+  .pdf-toolbar {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .pdf-toolbar .toolbar-spacer {
+    display: none;
+  }
 }
 
 .edit-actions {

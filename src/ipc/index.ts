@@ -79,6 +79,13 @@ export interface ImportPreview {
   temp_token: string
   pdf: { sha256: string; size: number; page_count: number | null; page_count_error: string | null } | null
   md: ParsedAnalysis | null
+  suggested_metadata: {
+    title: string
+    authors: string[]
+    year: number | null
+    doi: string
+    title_source: string
+  } | null
   page_warnings: string[]
   duplicates: { paper_id: string; title: string; reason: string }[]
   pairing_hint: string | null

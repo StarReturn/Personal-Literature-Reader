@@ -1,15 +1,23 @@
-/* 全局基础样式：Element Plus 为主，这里只保留布局令牌、页面过渡与 Markdown 渲染样式 */
+/* 本地研究工作台的语义令牌；交互控件继续由 Element Plus 提供。 */
 
 :root {
-  --bg: #f5f6f8;
-  --border: #e2e5ea;
-  --text-dim: #6a737d;
+  --app-bg: #f6f7f8;
+  --app-surface: #ffffff;
+  --app-rail: #f8f9fa;
+  --app-line: #e3e7eb;
+  --app-text: #24313c;
+  --app-muted: #5e6b76;
+  --app-subtle: #73808a;
+  --app-radius: 8px;
+  --bg: var(--app-bg);
+  --border: var(--app-line);
+  --text-dim: var(--app-muted);
   --primary: var(--el-color-primary);
-  --radius: 8px;
-  --sidebar-w: 240px;
+  --radius: var(--app-radius);
+  --sidebar-w: 232px;
 }
 
-* {
+*, *::before, *::after {
   box-sizing: border-box;
 }
 
@@ -23,7 +31,7 @@ body {
 body {
   font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
   font-size: 14px;
-  color: #24292f;
+  color: var(--app-text);
   background: var(--bg);
 }
 
@@ -82,7 +90,7 @@ body {
 }
 
 .md-body h1 { font-size: 1.35em; }
-.md-body h2 { font-size: 1.2em; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.md-body h2 { font-size: 1.2em; }
 .md-body h3 { font-size: 1.05em; }
 
 .md-body p {

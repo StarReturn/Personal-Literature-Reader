@@ -46,7 +46,7 @@ function gotoRead(paperId: string) {
 }
 
 // 综合结论折叠状态：默认收起，避免挤压对比表格
-const synthOpen = ref(false)
+const synthOpen = ref(true)
 
 // 添加文献弹窗
 const showPicker = ref(false)
@@ -313,10 +313,10 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
               <td class="dim-col dim-name">{{ dim }}</td>
               <td v-for="s in slots" :key="s.paper.id" class="cell">
                 <div v-if="cellPlaceholder(s)" class="cell-placeholder">
-                  <el-tag type="info" effect="plain" size="small">{{ cellPlaceholder(s) }}</el-tag>
+                  <span class="cell-placeholder-text">{{ cellPlaceholder(s) }}</span>
                 </div>
                 <div v-else-if="sectionOf(s, dim).missing" class="cell-placeholder">
-                  <el-tag type="warning" effect="plain" size="small">待补充</el-tag>
+                  <span class="cell-placeholder-text">待补充</span>
                 </div>
                 <MdRender
                   v-else
@@ -333,8 +333,9 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
       <!-- 综合结论（可折叠，带动画） -->
       <div class="synthesis-bar">
         <span class="synthesis-bar-title">我的综合结论</span>
-        <el-tag v-if="synthesis.conclusion" type="success" size="small" effect="plain">已填写个人结论</el-tag>
+        <span v-if="synthesis.conclusion" class="synthesis-state">已填写</span>
         <span class="spacer"></span>
+        <el-button text @click="synthOpen = !synthOpen">{{ synthOpen ? '收起' : '展开编辑' }}</el-button>
       </div>
       <el-collapse-transition>
         <section v-show="synthOpen" class="synthesis-panel">
@@ -353,11 +354,6 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
           </div>
         </section>
       </el-collapse-transition>
-      <div class="synthesis-toggle">
-        <el-button text @click="synthOpen = !synthOpen">
-          {{ synthOpen ? '收起综合结论 ▲' : '展开编辑综合结论 ▼' }}
-        </el-button>
-      </div>
     </template>
 
     <!-- 添加文献弹窗 -->
@@ -420,7 +416,8 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  background: var(--app-bg);
 }
 
 .cmp-header {
@@ -429,8 +426,8 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 8px 16px;
-  background: #fff;
+  padding: 12px 24px;
+  background: var(--app-surface);
   border-bottom: 1px solid var(--border);
 }
 
@@ -448,7 +445,7 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
 }
 
 .name-input :deep(input) {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
 }
 
@@ -470,20 +467,34 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  padding: 10px 16px;
+  padding: 16px 24px;
 }
 
 .dim-label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-dim);
   font-weight: 600;
 }
 
+.dim-row :deep(.el-check-tag) {
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-muted);
+}
+
+.dim-row :deep(.el-check-tag.is-checked) {
+  border-color: var(--app-line);
+  background: var(--app-surface);
+  color: var(--app-text);
+}
+
 /* 对比表 */
 .table-wrap {
-  flex: 1;
-  overflow: auto;
-  padding: 0 16px;
+  flex: none;
+  overflow-x: auto;
+  padding: 0 24px;
 }
 
 .cmp-table {
@@ -526,7 +537,7 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
 .paper-col-title {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -553,8 +564,9 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
 .cell {
   border: 1px solid var(--border);
   vertical-align: top;
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 1.6;
   min-width: 280px;
   background: #fff;
 }
@@ -563,18 +575,28 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
   padding: 4px 0;
 }
 
+.cell-placeholder-text {
+  color: var(--app-muted);
+  font-size: 13px;
+}
+
 /* 综合结论 */
 .synthesis-bar {
   flex: none;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 20px 0;
+  padding: 20px 24px 8px;
 }
 
 .synthesis-bar-title {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
+}
+
+.synthesis-state {
+  color: var(--app-muted);
+  font-size: 12px;
 }
 
 .spacer {
@@ -585,12 +607,11 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
   flex: none;
   background: #fff;
   border-top: 1px solid var(--border);
-  margin: 6px 16px 0;
-  padding: 10px 16px;
+  margin: 0 24px 24px;
+  padding: 16px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  max-height: 40vh;
-  overflow-y: auto;
+  max-width: 1180px;
 }
 
 .hint {
@@ -616,13 +637,6 @@ const SYNTHESIS_FIELDS: { key: keyof Synthesis; label: string; hint: string }[] 
   font-weight: 400;
   font-size: 12px;
   color: var(--text-dim);
-}
-
-.synthesis-toggle {
-  flex: none;
-  display: flex;
-  justify-content: center;
-  padding: 2px 0 8px;
 }
 
 /* 弹窗与抽屉 */

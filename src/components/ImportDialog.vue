@@ -14,6 +14,7 @@ import {
 import { api, type CommitRequest, type ImportPreview } from '../ipc'
 import { useLibraryStore } from '../stores/library'
 import { toastError, toastOk } from '../lib/toast'
+import { lookupDoiMetadata, type BibliographicMetadata } from '../lib/bibliography'
 import MdRender from './MdRender.vue'
 
 const visible = defineModel<boolean>({ default: false })
@@ -54,6 +55,7 @@ const preview = ref<ImportPreview | null>(null)
 const analyzing = ref(false)
 const committing = ref(false)
 const pickedMdText = ref('')
+const metadataNote = ref('')
 
 const form = ref({
   title: '',
@@ -75,6 +77,7 @@ function resetSingle() {
   mdFile.value = null
   mdPasted.value = ''
   pickedMdText.value = ''
+  metadataNote.value = ''
   form.value = { title: '', authors: '', year: null, doi: '', tags: [], project: '', updatePaperId: '', replacePdf: false }
 }
 
@@ -118,11 +121,29 @@ async function analyze() {
       mdText: mdPasted.value.trim() || null
     })
     const meta = preview.value.md?.meta
-    form.value.title = meta?.title || ''
-    form.value.authors = (meta?.authors || []).join(', ')
-    form.value.year = meta?.year ?? null
-    form.value.doi = meta?.doi || ''
+    const local = preview.value.suggested_metadata
+    const doi = meta?.doi || local?.doi || ''
+    let online: BibliographicMetadata | null = null
+    let onlineUnavailable = false
+    if (doi) {
+      try {
+        online = await lookupDoiMetadata(doi)
+      } catch {
+        onlineUnavailable = true
+      }
+    }
+    form.value.title = meta?.title || online?.title || local?.title || ''
+    form.value.authors = (meta?.authors?.length ? meta.authors : online?.authors?.length ? online.authors : local?.authors || []).join(', ')
+    form.value.year = meta?.year ?? online?.year ?? local?.year ?? null
+    form.value.doi = meta?.doi || online?.doi || local?.doi || ''
     form.value.tags = meta?.tags || []
+    metadataNote.value = online
+      ? '已通过 DOI 从 Crossref 补全信息；请核对标题、作者和年份。'
+      : local
+        ? `已依据${local.title_source}预填可识别字段${onlineUnavailable ? '；联网补全暂不可用' : ''}，请核对。`
+        : meta
+          ? '已从分析 Markdown 读取信息，请核对。'
+          : '未能自动识别文献信息，请至少填写标题。'
     form.value.updatePaperId = ''
     form.value.replacePdf = false
     step.value = 1
@@ -282,6 +303,7 @@ async function importAll() {
   batchProgress.value = { done: 0, total: batchRows.value.length }
   let okCount = 0
   const fails: string[] = []
+  let onlineAvailable = true
   for (const row of batchRows.value) {
     if (row.state === 'ok') {
       batchProgress.value.done++
@@ -299,13 +321,23 @@ async function importAll() {
       })
       row.preview = p
       const meta = p.md?.meta
-      const title = meta?.title?.trim() || row.stem
+      const local = p.suggested_metadata
+      const doi = meta?.doi || local?.doi || ''
+      let online: BibliographicMetadata | null = null
+      if (doi && onlineAvailable) {
+        try {
+          online = await lookupDoiMetadata(doi, 2500)
+        } catch {
+          onlineAvailable = false
+        }
+      }
+      const title = meta?.title?.trim() || online?.title || local?.title || row.stem
       await api.commitImport({
         temp_token: p.temp_token,
         title,
-        authors: meta?.authors || [],
-        year: meta?.year ?? null,
-        doi: meta?.doi || '',
+        authors: meta?.authors?.length ? meta.authors : online?.authors?.length ? online.authors : local?.authors || [],
+        year: meta?.year ?? online?.year ?? local?.year ?? null,
+        doi: meta?.doi || online?.doi || local?.doi || '',
         tags: meta?.tags || [],
         project: batchProject.value.trim() || null
       })
@@ -451,9 +483,11 @@ const DUP_REASON: Record<string, string> = { sha256: '相同 PDF 内容', doi: '
           <el-descriptions-item label="页码链接">{{ preview.md?.page_links.length ?? 0 }} 处</el-descriptions-item>
         </el-descriptions>
 
+        <p class="metadata-note">{{ metadataNote }}联网查询时仅发送 DOI；所有字段都可以修改。</p>
+
         <el-form label-position="top" class="form-grid">
           <el-form-item required>
-            <template #label>标题 <span class="req">*</span></template>
+            <template #label>标题</template>
             <el-input v-model="form.title" placeholder="正式入库时必填" />
           </el-form-item>
           <el-form-item>
@@ -541,7 +575,7 @@ const DUP_REASON: Record<string, string> = { sha256: '相同 PDF 内容', doi: '
         </el-table-column>
         <el-table-column label="识别标题" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
-            {{ row.preview?.md?.meta?.title || (row.state === 'ok' ? '—' : row.stem) }}
+            {{ row.preview?.md?.meta?.title || row.preview?.suggested_metadata?.title || row.stem }}
           </template>
         </el-table-column>
         <el-table-column label="配对" width="90">
@@ -676,13 +710,16 @@ const DUP_REASON: Record<string, string> = { sha256: '相同 PDF 内容', doi: '
   font-size: 12px;
 }
 
+.metadata-note {
+  margin: 8px 0 16px;
+  color: #6a737d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .warn-text {
   color: #e6a23c;
   font-size: 12px;
-}
-
-.req {
-  color: #f56c6c;
 }
 
 .form-grid {

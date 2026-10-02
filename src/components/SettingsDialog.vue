@@ -6,7 +6,6 @@ import { Download, Folder, FolderOpened } from '@element-plus/icons-vue'
 import { api } from '../ipc'
 import { toastError, toastInfo, toastOk } from '../lib/toast'
 import { THEMES, getCurrentThemeId, selectTheme } from '../lib/theme'
-import { MOOD_ICONS, MOOD_ICON_VIEWBOX } from '../lib/moodIcons'
 
 const visible = defineModel<boolean>({ default: false })
 
@@ -21,7 +20,7 @@ const activeTheme = ref(getCurrentThemeId())
 function onPickTheme(id: string) {
   const preset = selectTheme(id)
   activeTheme.value = preset.id
-  toastOk(`主题已切换为「${preset.name}」（${preset.mood}）`)
+  toastOk(`已切换为「${preset.name}」`)
 }
 
 watch(visible, (v) => {
@@ -98,8 +97,7 @@ async function downloadTemplate() {
 
 <template>
   <el-dialog v-model="visible" title="设置与备份" width="min(780px, 92vw)" :close-on-click-modal="false" destroy-on-close>
-    <!-- 主题色 -->
-    <div class="section-title">主题色</div>
+    <div class="section-title">外观</div>
     <div class="theme-grid">
       <button
         v-for="t in THEMES"
@@ -108,31 +106,18 @@ async function downloadTemplate() {
         :class="{ active: activeTheme === t.id }"
         :style="{ '--theme-color': t.color }"
         :title="`${t.name} · ${t.mood}（${t.origin}）`"
+        :aria-label="`选择${t.name}主题`"
+        :aria-pressed="activeTheme === t.id"
         @click="onPickTheme(t.id)"
       >
-        <svg class="theme-icon" :viewBox="MOOD_ICON_VIEWBOX" aria-hidden="true">
-          <g v-html="MOOD_ICONS[t.icon]" />
-        </svg>
+        <span class="theme-swatch" aria-hidden="true"></span>
         <span class="theme-name">{{ t.name }}</span>
-        <span class="theme-mood">{{ t.mood }}</span>
-        <span v-if="activeTheme === t.id" class="theme-check">
-          <svg :viewBox="MOOD_ICON_VIEWBOX" aria-hidden="true"><path d="M10 24 L20 34 L38 14" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" /></svg>
-        </span>
       </button>
     </div>
 
-    <el-alert
-      type="info"
-      :closable="false"
-      show-icon
-      class="gap"
-      title="资料库独立于应用安装目录，包含 SQLite 数据库与托管 PDF；升级或重装应用不会影响这里的数据。"
-    />
-    <el-descriptions :column="1" border size="small" class="gap">
-      <el-descriptions-item label="当前资料库">
-        <code class="dir-value">{{ libraryDir }}</code>
-      </el-descriptions-item>
-    </el-descriptions>
+    <div class="section-title">资料库</div>
+    <p class="library-note">数据保存在应用安装目录之外，升级或重装不会清除文献。</p>
+    <div class="library-location"><span>当前资料库</span><code class="dir-value">{{ libraryDir }}</code></div>
 
     <div class="section-title">完整备份</div>
     <div class="op-row">
@@ -168,10 +153,6 @@ async function downloadTemplate() {
 </template>
 
 <style scoped>
-.gap {
-  margin-bottom: 12px;
-}
-
 .dir-value {
   font-size: 13px;
   word-break: break-all;
@@ -179,85 +160,80 @@ async function downloadTemplate() {
 
 .section-title {
   font-weight: 600;
-  font-size: 14px;
-  margin: 14px 0 8px;
+  font-size: 15px;
+  margin: 20px 0 10px;
 }
 
-/* 主题色卡片：整卡填充主题色，底部暗化渐变保证白色文字可读 */
 .theme-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 20px;
 }
 
 .theme-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: space-between;
-  height: 108px;
-  padding: 14px 3px 8px;
-  border: 2px solid transparent;
-  border-radius: 10px;
-  color: #fff;
-  cursor: pointer;
-  overflow: hidden;
-  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
-  background-color: var(--theme-color);
-  background-image: linear-gradient(180deg, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.34) 100%);
-  /* 渐变按 padding-box 定位后会平铺进 2px 透明边框区，把最暗端画到卡片顶边形成黑线 */
-  background-repeat: no-repeat;
-}
-
-.theme-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
-}
-
-.theme-card.active {
-  border-color: #fff;
-  box-shadow: 0 0 0 2px var(--el-color-primary-light-5), 0 4px 14px rgba(0, 0, 0, 0.22);
-}
-
-.theme-icon {
-  width: 24px;
-  height: 24px;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
-}
-
-.theme-name {
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.4;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-
-.theme-mood {
-  font-size: 10.5px;
-  line-height: 1.4;
-  opacity: 0.95;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-
-.theme-check {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  background: #fff;
-  color: var(--el-color-primary);
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px;
+  border: 1px solid var(--app-line);
+  border-radius: 6px;
+  color: var(--app-text);
+  cursor: pointer;
+  background: var(--app-surface);
+  transition: border-color 0.15s, background 0.15s;
 }
 
-.theme-check svg {
-  width: 10px;
-  height: 10px;
+.theme-card:hover {
+  background: var(--app-rail);
+  border-color: var(--app-subtle);
+}
+
+.theme-card.active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.theme-card:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+
+.theme-swatch {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--theme-color);
+}
+
+.theme-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.library-note {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--app-muted);
+}
+
+.library-location {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--app-line);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.library-location > span {
+  flex: none;
+  color: var(--app-muted);
 }
 
 .op-row {

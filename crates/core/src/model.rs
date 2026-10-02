@@ -85,11 +85,22 @@ pub struct ImportPdfInfo {
     pub page_count_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SuggestedMetadata {
+    pub title: String,
+    pub authors: Vec<String>,
+    pub year: Option<i64>,
+    pub doi: String,
+    /// PDF 文档信息、PDF 首页或文件名；供预览页说明自动填充依据。
+    pub title_source: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportPreview {
     pub temp_token: String,
     pub pdf: Option<ImportPdfInfo>,
     pub md: Option<ParsedAnalysis>,
+    pub suggested_metadata: Option<SuggestedMetadata>,
     /// 结合 PDF 页数校验后的页码告警（越界等）
     pub page_warnings: Vec<String>,
     pub duplicates: Vec<DuplicateHit>,

@@ -7,10 +7,10 @@ import { ElMessage } from 'element-plus'
 import {
   ArrowDown,
   DataAnalysis,
-  Notebook,
   Delete,
   Download,
   Edit,
+  Filter,
   Files,
   FolderOpened,
   Histogram,
@@ -41,6 +41,7 @@ const filterProject = ref('')
 const filterTag = ref('')
 const filterStatus = ref('')
 const filterAnalysis = ref('')
+const filtersOpen = ref(false)
 const inTrash = ref(false)
 const selected = ref<Set<string>>(new Set())
 
@@ -84,11 +85,6 @@ const STATUS_LABELS: Record<string, string> = {
   to_read: '待阅读',
   reading: '阅读中',
   finished: '已完成'
-}
-const STATUS_TYPE: Record<string, 'info' | 'warning' | 'success'> = {
-  to_read: 'info',
-  reading: 'warning',
-  finished: 'success'
 }
 const ANALYSIS_LABELS: Record<string, string> = {
   none: '未导入',
@@ -505,17 +501,40 @@ async function removeTag(id: number, name: string) {
 
     <!-- 主区 -->
     <el-container class="main-area">
-      <!-- 自适应工具栏：宽屏铺满伸展，窄屏自动换行 -->
+      <div class="library-top">
+        <div class="library-heading">
+          <h1>{{ inTrash ? '回收站' : '文献库' }}</h1>
+          <span>{{ papers.length }} 篇文献</span>
+          <span v-if="loading" class="loading-hint"><el-icon class="is-loading"><Loading /></el-icon> 加载中…</span>
+        </div>
+        <div v-if="!inTrash" class="library-top-actions">
+          <el-dropdown trigger="click" @command="(cmd: string) => cmd === 'notes' ? exportAllNotes() : exportAll()">
+            <el-button :icon="Download" :disabled="papers.length === 0">导出<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="full">全部文献与笔记</el-dropdown-item>
+                <el-dropdown-item command="notes">仅个人笔记</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-button type="primary" :icon="Plus" @click="showImport = true">导入文献</el-button>
+        </div>
+      </div>
       <div class="lib-toolbar">
         <el-input
           v-model="search"
           class="search-input"
-          placeholder="搜索标题 / 作者 / DOI / 标签 / 分析内容 / 笔记…"
+          placeholder="搜索文献、作者、DOI、分析或笔记"
           clearable
           :prefix-icon="Search"
           @clear="refresh"
           @keyup.enter="refresh"
         />
+        <el-button :icon="Filter" :type="hasFilter ? 'primary' : 'default'" :plain="hasFilter" @click="filtersOpen = !filtersOpen">
+          筛选{{ hasFilter ? ' · 已启用' : '' }}
+        </el-button>
+      </div>
+      <div v-show="filtersOpen" class="filter-panel">
         <el-select v-model="filterProject" placeholder="项目" clearable filterable class="filter-select" @change="refresh">
           <el-option v-for="p in store.projects" :key="p.id" :label="p.name" :value="p.name" />
         </el-select>
@@ -533,12 +552,6 @@ async function removeTag(id: number, name: string) {
           <el-option label="未导入" value="none" />
         </el-select>
         <el-button v-if="hasFilter" text type="primary" class="toolbar-flex-item" @click="clearFilters">清除筛选</el-button>
-        <span v-if="loading" class="loading-hint toolbar-flex-item"><el-icon class="is-loading"><Loading /></el-icon> 加载中…</span>
-        <span class="toolbar-actions">
-          <el-button :icon="Download" @click="exportAll">导出全部</el-button>
-        <el-button :icon="Notebook" @click="exportAllNotes">导出笔记</el-button>
-          <el-button type="primary" :icon="Plus" @click="showImport = true">导入文献</el-button>
-        </span>
       </div>
 
       <!-- 列表 -->
@@ -547,13 +560,14 @@ async function removeTag(id: number, name: string) {
           <el-skeleton v-for="i in 4" :key="i" :rows="2" animated />
         </div>
 
-        <el-empty v-else-if="papers.length === 0" :description="inTrash ? '回收站为空' : hasFilter ? '没有符合条件的文献' : '资料库还是空的'">
-          <template v-if="!inTrash && !hasFilter">
-            <el-button type="primary" :icon="Plus" @click="showImport = true">导入第一篇文献</el-button>
-            <p class="empty-hint">支持批量：一次选择多个 PDF 与同名 MD 自动配对</p>
-          </template>
-          <el-button v-if="hasFilter" @click="clearFilters">清除筛选</el-button>
-        </el-empty>
+        <div v-else-if="papers.length === 0" class="library-empty">
+          <el-icon class="empty-icon"><Files /></el-icon>
+          <h2>{{ inTrash ? '回收站为空' : hasFilter ? '没有找到文献' : '开始整理你的文献' }}</h2>
+          <p v-if="!inTrash && !hasFilter">导入 PDF，随后即可阅读、批注和整理分析。</p>
+          <p v-else-if="hasFilter">试试调整搜索词或筛选条件。</p>
+          <el-button v-if="!inTrash && !hasFilter" type="primary" :icon="Plus" @click="showImport = true">导入文献</el-button>
+          <el-button v-else-if="hasFilter" @click="clearFilters">清除筛选</el-button>
+        </div>
 
         <transition-group v-else name="list" tag="div" class="paper-list">
           <div v-for="p in papers" :key="p.id" class="paper-row" :class="{ selected: selected.has(p.id) }">
@@ -572,31 +586,27 @@ async function removeTag(id: number, name: string) {
                 <span v-if="p.authors.length" class="meta-authors">
                   {{ p.authors.slice(0, 3).join(', ') }}{{ p.authors.length > 3 ? ' 等' : '' }}
                 </span>
-                <el-tag size="small" :type="STATUS_TYPE[p.reading_status]" effect="light">
-                  {{ STATUS_LABELS[p.reading_status] }}
-                </el-tag>
-                <el-tag
-                  size="small"
-                  :type="p.analysis_status === 'comparable' ? 'success' : 'info'"
-                  :effect="p.analysis_status === 'none' ? 'light' : 'plain'"
+                <span class="meta-status" :class="`status-${p.reading_status}`">{{ STATUS_LABELS[p.reading_status] }}</span>
+                <span
+                  class="meta-analysis"
                   :class="{ 'clickable-tag': p.analysis_status === 'none' }"
                   :title="p.analysis_status === 'none' ? '点击导入 MD 分析文件' : undefined"
                   @click.stop="p.analysis_status === 'none' && importMdFor(p.id)"
                 >
                   {{ ANALYSIS_LABELS[p.analysis_status] }}
-                </el-tag>
-                <el-tag v-if="p.has_notes" size="small" type="warning" effect="plain">有笔记</el-tag>
+                </span>
+                <span v-if="p.has_notes" class="meta-note">有笔记</span>
                 <el-tag
-                  v-for="pr in p.projects.slice(0, 2)"
+                  v-for="pr in p.projects.slice(0, 1)"
                   :key="pr"
                   size="small"
-                  effect="dark"
-                  type="primary"
+                  effect="plain"
                   class="meta-tag project-tag"
                   title="点击筛选该项目"
                   @click.stop="setProject(pr)"
                 >{{ pr }}</el-tag>
-                <el-tag v-for="t in p.tags.slice(0, 4)" :key="t" size="small" effect="plain" class="meta-tag">{{ t }}</el-tag>
+                <el-tag v-for="t in p.tags.slice(0, 2)" :key="t" size="small" effect="plain" class="meta-tag">{{ t }}</el-tag>
+                <span v-if="p.tags.length > 2" class="meta-more">+{{ p.tags.length - 2 }}</span>
                 <span v-if="p.matched_on && p.matched_on.length" class="match-hint">
                   命中：{{ p.matched_on.map((m) => MATCH_LABELS[m] || m).join(' / ') }}
                 </span>
@@ -604,7 +614,7 @@ async function removeTag(id: number, name: string) {
             </div>
             <div class="paper-actions" @click.stop>
               <template v-if="!inTrash">
-                <el-button v-if="p.analysis_status === 'none'" text type="success" @click="importMdFor(p.id)">导入MD</el-button>
+                <el-button v-if="p.analysis_status === 'none'" text @click="importMdFor(p.id)">导入分析</el-button>
                 <el-button text type="primary" @click="readPaper(p.id)">阅读</el-button>
                 <el-dropdown trigger="click" @command="(cmd: string) => {
                   if (cmd === 'compare') { toggleSelect(p.id); ElMessage.info('已加入底部选择条，继续勾选后点击对比') }
@@ -699,9 +709,9 @@ async function removeTag(id: number, name: string) {
 
 /* ---------- 侧栏 ---------- */
 .sidebar {
-  width: 248px;
-  border-right: 1px solid #e6e9ef;
-  background: linear-gradient(180deg, #f7f9fc 0%, #f2f5f9 100%);
+  width: var(--sidebar-w);
+  border-right: 1px solid var(--app-line);
+  background: var(--app-rail);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -712,16 +722,15 @@ async function removeTag(id: number, name: string) {
   align-items: center;
   gap: 10px;
   padding: 14px 16px;
-  border-bottom: 1px solid #e6e9ef;
+  border-bottom: 1px solid var(--app-line);
   flex: none;
 }
 
 .brand-logo {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 6px rgba(31, 45, 61, 0.18);
   flex: none;
   background: #fff;
 }
@@ -741,8 +750,8 @@ async function removeTag(id: number, name: string) {
 }
 
 .brand-sub {
-  font-size: 11px;
-  color: #8f959e;
+  font-size: 12px;
+  color: var(--app-muted);
   margin-top: 1px;
 }
 
@@ -756,10 +765,11 @@ async function removeTag(id: number, name: string) {
   position: relative;
   display: flex;
   align-items: center;
+  border: 1px solid transparent;
   border-radius: 8px;
   margin: 2px 0;
   transition: background 0.15s;
-  color: #3b4048;
+  color: var(--app-text);
 }
 
 .side-item:hover {
@@ -769,7 +779,7 @@ async function removeTag(id: number, name: string) {
 .nav-item {
   padding: 9px 12px;
   gap: 9px;
-  font-size: 13.5px;
+  font-size: 14px;
   cursor: pointer;
   user-select: none;
 }
@@ -778,7 +788,7 @@ async function removeTag(id: number, name: string) {
   background: #fff;
   color: var(--el-color-primary);
   font-weight: 600;
-  box-shadow: 0 1px 4px rgba(31, 45, 61, 0.08);
+  border: 1px solid var(--app-line);
 }
 
 .nav-item.active::before {
@@ -805,10 +815,10 @@ async function removeTag(id: number, name: string) {
 }
 
 .side-group-title {
-  font-size: 11.5px;
-  color: #8f959e;
+  font-size: 12px;
+  color: var(--app-muted);
   font-weight: 600;
-  letter-spacing: 1px;
+  letter-spacing: 0.2px;
 }
 
 .icon-mini {
@@ -816,7 +826,7 @@ async function removeTag(id: number, name: string) {
   background: none;
   padding: 3px;
   border-radius: 5px;
-  color: #8f959e;
+  color: var(--app-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -847,7 +857,7 @@ async function removeTag(id: number, name: string) {
 .side-item.active {
   background: #fff;
   color: var(--el-color-primary);
-  box-shadow: 0 1px 4px rgba(31, 45, 61, 0.08);
+  border: 1px solid var(--app-line);
 }
 
 .side-item.active .side-item-btn {
@@ -864,9 +874,9 @@ async function removeTag(id: number, name: string) {
 
 .side-count {
   flex: none;
-  font-size: 11.5px;
-  color: #8f959e;
-  background: rgba(143, 149, 158, 0.12);
+  font-size: 12px;
+  color: var(--app-muted);
+  background: #edf0f2;
   border-radius: 8px;
   padding: 0 7px;
   line-height: 17px;
@@ -882,7 +892,7 @@ async function removeTag(id: number, name: string) {
   border: none;
   background: none;
   padding: 4px 6px;
-  color: #8f959e;
+  color: var(--app-muted);
   cursor: pointer;
   border-radius: 5px;
   opacity: 0;
@@ -901,7 +911,7 @@ async function removeTag(id: number, name: string) {
 .side-empty {
   padding: 4px 8px;
   font-size: 12px;
-  color: #a8abb2;
+  color: var(--app-muted);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -919,6 +929,18 @@ async function removeTag(id: number, name: string) {
   transition: transform 0.15s;
 }
 
+.tag-cloud :deep(.el-tag) {
+  color: var(--app-muted);
+  border-color: var(--app-line);
+  background: var(--app-surface);
+}
+
+.tag-cloud :deep(.el-tag.el-tag--dark) {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+
 .tag-chip:hover {
   transform: translateY(-1px);
 }
@@ -926,53 +948,83 @@ async function removeTag(id: number, name: string) {
 /* 底部固定区 */
 .side-footer {
   flex: none;
-  border-top: 1px solid #e6e9ef;
+  border-top: 1px solid var(--app-line);
   padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--app-rail);
 }
 
 /* ---------- 主区 ---------- */
 .main-area {
   min-width: 0;
-  /* el-header 换为 div 后 el-container 会误判为横向布局，显式纵向排列 */
   flex-direction: column;
   display: flex;
+}
+
+.library-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 12px;
+  background: var(--app-surface);
+}
+
+.library-heading,
+.library-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.library-heading h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.library-heading > span {
+  color: var(--app-muted);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .lib-toolbar {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 20px;
-  background: #fff;
-  border-bottom: 1px solid #e6e9ef;
-  flex-wrap: wrap;
+  gap: 12px;
+  padding: 0 24px 16px;
+  background: var(--app-surface);
+  border-bottom: 1px solid var(--app-line);
 }
 
-/* 搜索框弹性伸展：宽屏吃掉剩余空间，窄屏最小 420px 后换行 */
 .search-input {
-  flex: 2 1 460px;
-  min-width: 320px;
-  max-width: 900px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 640px;
 }
 
-/* 筛选下拉随容器伸展（自适应核心），窄屏最小 160px */
+.filter-panel {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 24px;
+  background: var(--app-surface);
+  border-bottom: 1px solid var(--app-line);
+}
+
 .filter-select {
-  flex: 1 1 180px;
-  min-width: 160px;
-  max-width: 260px;
+  flex: 0 1 180px;
+  min-width: 144px;
 }
 
 .toolbar-flex-item {
   flex: none;
-}
-
-.toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: auto;
 }
 
 /* 超宽屏（≥1800px）：侧栏与控件适度放大，列表限宽居中保证可读性 */
@@ -1000,14 +1052,34 @@ async function removeTag(id: number, name: string) {
 .paper-list-wrap {
   position: relative;
   overflow-y: auto;
-  padding: 12px 20px 90px;
+  padding: 24px 24px 90px;
   display: flex;
   flex-direction: column;
 }
 
-/* 空状态在剩余空间内垂直居中 */
-.paper-list-wrap > .el-empty {
+.library-empty {
   margin: auto;
+  max-width: 420px;
+  text-align: center;
+  color: var(--app-muted);
+}
+
+.empty-icon {
+  font-size: 32px;
+  color: var(--app-subtle);
+}
+
+.library-empty h2 {
+  margin: 16px 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.library-empty p {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .skeleton-area {
@@ -1018,34 +1090,34 @@ async function removeTag(id: number, name: string) {
   max-width: 760px;
 }
 
-.empty-hint {
-  color: #8f959e;
-  font-size: 12px;
-  margin: 10px 0 0;
-}
-
 .paper-list {
   width: 100%;
+  max-width: 1180px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius);
+  background: var(--app-surface);
+  overflow: hidden;
 }
 
 .paper-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border: 1px solid #e6e9ef;
-  border-radius: 8px;
-  background: #fff;
-  transition: border-color 0.15s, box-shadow 0.2s, transform 0.15s;
+  gap: 12px;
+  min-height: 76px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--app-line);
+  background: var(--app-surface);
+  transition: background 0.15s;
 }
 
 .paper-row:hover {
-  border-color: var(--el-color-primary-light-5);
-  box-shadow: 0 2px 12px var(--el-color-primary-light-9);
-  transform: translateY(-1px);
+  background: #fafbfc;
+}
+
+.paper-row:last-child {
+  border-bottom: 0;
 }
 
 .paper-row.selected {
@@ -1071,7 +1143,9 @@ async function removeTag(id: number, name: string) {
 }
 
 .paper-title {
+  font-size: 16px;
   font-weight: 600;
+  color: var(--app-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1083,7 +1157,7 @@ async function removeTag(id: number, name: string) {
 
 .paper-year {
   flex: none;
-  color: #8f959e;
+  color: var(--app-muted);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
@@ -1091,18 +1165,47 @@ async function removeTag(id: number, name: string) {
 .paper-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 5px;
+  gap: 8px;
+  margin-top: 8px;
   flex-wrap: wrap;
 }
 
 .meta-authors {
-  color: #8f959e;
-  font-size: 12px;
+  color: var(--app-muted);
+  font-size: 13px;
   max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.meta-status,
+.meta-analysis,
+.meta-note,
+.meta-more {
+  color: var(--app-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.meta-status::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #9aa4ad;
+  vertical-align: 2px;
+}
+
+.meta-status.status-reading::before { background: #567e9b; }
+.meta-status.status-finished::before { background: #5b8b70; }
+
+.paper-meta :deep(.el-tag) {
+  color: var(--app-muted);
+  background: #f8f9fa;
+  border-color: var(--app-line);
 }
 
 .meta-tag {
@@ -1120,7 +1223,8 @@ async function removeTag(id: number, name: string) {
 }
 
 .clickable-tag:hover {
-  outline: 1px solid currentColor;
+  color: var(--el-color-primary);
+  text-decoration: underline;
 }
 
 .assign-hint {
@@ -1132,7 +1236,7 @@ async function removeTag(id: number, name: string) {
 
 .match-hint {
   font-size: 12px;
-  color: var(--el-color-primary);
+  color: var(--app-muted);
 }
 
 .paper-actions {
@@ -1175,5 +1279,22 @@ async function removeTag(id: number, name: string) {
 .bar-leave-to {
   opacity: 0;
   transform: translateX(-50%) translateY(20px);
+}
+
+@media (max-width: 900px) {
+  .sidebar { width: 200px; }
+  .library-top { padding: 16px 16px 12px; }
+  .lib-toolbar { padding: 0 16px 16px; }
+  .filter-panel { padding: 12px 16px; }
+  .paper-list-wrap { padding: 16px 16px 90px; }
+}
+
+@media (max-width: 700px) {
+  .sidebar { display: none; }
+  .library-top { flex-wrap: wrap; }
+  .library-top-actions { margin-left: auto; }
+  .paper-row { align-items: flex-start; }
+  .paper-actions { align-self: center; }
+  .filter-select { flex: 1 1 140px; }
 }
 </style>

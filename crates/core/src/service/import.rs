@@ -8,12 +8,92 @@ use crate::error::{CoreError, CoreResult};
 use crate::mdparse::{parse_analysis, ParsedAnalysis};
 use crate::model::{
     AnalysisResponse, CommitRequest, CommitResult, DuplicateHit, EvidenceInput, EvidenceRecord,
-    ImportPdfInfo, ImportPreview,
+    ImportPdfInfo, ImportPreview, SuggestedMetadata,
 };
 use crate::service::papers::{paper_exists, set_projects, set_tags};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::fs;
 use std::path::PathBuf;
+
+fn pdf_info_field(doc: &lopdf::Document, key: &[u8]) -> String {
+    doc.trailer
+        .get(b"Info")
+        .ok()
+        .and_then(|info| doc.dereference(info).ok())
+        .and_then(|(_, info)| info.as_dict().ok())
+        .and_then(|info| info.get(key).ok())
+        .and_then(|value| doc.dereference(value).ok())
+        .and_then(|(_, value)| lopdf::decode_text_string(value).ok())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn pdf_doi(text: &str) -> String {
+    let re = regex::Regex::new(r#"(?i)10\.\d{4,9}/[^\s<>"{}]+"#).unwrap();
+    re.find(text)
+        .map(|m| m.as_str().trim_end_matches(|c: char| ".,;:)]}>".contains(c)).to_string())
+        .unwrap_or_default()
+}
+
+fn plausible_title(text: &str) -> bool {
+    let text = text.trim();
+    let lower = text.to_lowercase();
+    text.chars().count() >= 12
+        && text.chars().count() <= 180
+        && !lower.contains("untitled")
+        && !lower.starts_with("microsoft word")
+        && !lower.starts_with("doi:")
+        && !lower.starts_with("http")
+        && !lower.starts_with("arxiv")
+        && !lower.starts_with("page ")
+        && !lower.starts_with("copyright")
+        && !lower.starts_with("©")
+}
+
+fn pdf_suggested_metadata(doc: &lopdf::Document, filename: Option<&str>) -> SuggestedMetadata {
+    let first_page = doc.extract_text(&[1]).unwrap_or_default();
+    let info_title = pdf_info_field(doc, b"Title");
+    let page_title = first_page
+        .lines()
+        .map(str::trim)
+        .find(|line| plausible_title(line))
+        .unwrap_or_default();
+    let page_title = regex::Regex::new(r"(?i)\s*[-–—]?\s*page\s+\d+(?:\s+of\s+\d+)?\s*$")
+        .unwrap()
+        .replace(page_title, "")
+        .trim()
+        .to_string();
+    let filename_title = filename
+        .and_then(|name| std::path::Path::new(name).file_stem())
+        .map(|stem| stem.to_string_lossy().replace(['_', '-'], " "))
+        .unwrap_or_default();
+    let (title, title_source) = if plausible_title(&info_title) {
+        (info_title, "PDF 文档信息")
+    } else if !page_title.is_empty() {
+        (page_title, "PDF 首页")
+    } else {
+        (filename_title, "文件名")
+    };
+    let author = pdf_info_field(doc, b"Author");
+    let authors = if author.trim().is_empty() {
+        Vec::new()
+    } else {
+        author
+            .split([';', '；'])
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let date = pdf_info_field(doc, b"CreationDate");
+    let year = regex::Regex::new(r"(?:19|20)\d{2}")
+        .unwrap()
+        .find(&date)
+        .and_then(|m| m.as_str().parse().ok());
+    let doi = pdf_doi(&format!("{} {}", pdf_info_field(doc, b"Keywords"), first_page));
+    SuggestedMetadata { title, authors, year, doi, title_source: title_source.into() }
+}
 
 fn temp_import_dir(token: &str) -> PathBuf {
     app_data_dir().join("tmp-import").join(token)
@@ -39,11 +119,15 @@ pub fn analyze_import(
     fs::create_dir_all(&dir)?;
 
     let mut pdf_info: Option<ImportPdfInfo> = None;
+    let mut suggested_metadata: Option<SuggestedMetadata> = None;
     if let Some(bytes) = &pdf_bytes {
         fs::write(dir.join("pdf.bin"), bytes)?;
-        let (page_count, page_count_error) = match count_pdf_pages(bytes) {
-            Ok(n) => (Some(n), None),
-            Err(e) => (None, Some(e)),
+        let (page_count, page_count_error) = match lopdf::Document::load_mem(bytes) {
+            Ok(doc) => {
+                suggested_metadata = Some(pdf_suggested_metadata(&doc, pdf_filename.as_deref()));
+                (Some(doc.get_pages().len() as i64), None)
+            }
+            Err(e) => (None, Some(format!("无法读取 PDF 页数：{e}"))),
         };
         pdf_info = Some(ImportPdfInfo {
             sha256: sha256_hex(bytes),
@@ -122,8 +206,10 @@ pub fn analyze_import(
             })?;
             duplicates.extend(rows.flatten());
         }
-        if let Some(p) = &parsed {
-            let nd = normalize_doi(&p.meta.doi);
+        let candidate_doi = parsed.as_ref().map(|p| p.meta.doi.as_str()).filter(|doi| !doi.is_empty())
+            .or_else(|| suggested_metadata.as_ref().map(|m| m.doi.as_str()));
+        if let Some(doi) = candidate_doi {
+            let nd = normalize_doi(doi);
             if !nd.is_empty() {
                 let mut stmt = conn
                     .prepare("SELECT id, title FROM papers WHERE lower(trim(doi)) = ?1")?;
@@ -136,7 +222,11 @@ pub fn analyze_import(
                 })?;
                 duplicates.extend(rows.flatten());
             }
-            let tk = title_key(&p.meta.title);
+        }
+        let candidate_title = parsed.as_ref().map(|p| p.meta.title.as_str()).filter(|title| !title.is_empty())
+            .or_else(|| suggested_metadata.as_ref().map(|m| m.title.as_str()));
+        if let Some(title) = candidate_title {
+            let tk = title_key(title);
             if tk.len() >= 8 {
                 let mut stmt = conn.prepare("SELECT id, title FROM papers")?;
                 let rows = stmt.query_map([], |r| {
@@ -160,6 +250,7 @@ pub fn analyze_import(
         temp_token: token,
         pdf: pdf_info,
         md: parsed,
+        suggested_metadata,
         page_warnings,
         duplicates,
         pairing_hint,
@@ -185,6 +276,28 @@ pub fn analyze_import_paths(
         None => md_text,
     };
     analyze_import(state, pdf_bytes, pdf_filename, md)
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_local_pdf_title_and_doi() {
+        let bytes = include_bytes!("../../../../samples/anno-test.pdf");
+        let doc = lopdf::Document::load_mem(bytes).unwrap();
+        let metadata = pdf_suggested_metadata(&doc, Some("fallback-name.pdf"));
+        assert_eq!(metadata.title, "Annotation Test Paper");
+        assert_eq!(pdf_doi("https://doi.org/10.1038/nature12373."), "10.1038/nature12373");
+    }
+
+    #[test]
+    fn uses_filename_when_pdf_has_no_readable_title() {
+        let doc = lopdf::Document::with_version("1.5");
+        let metadata = pdf_suggested_metadata(&doc, Some("my_paper.pdf"));
+        assert_eq!(metadata.title, "my paper");
+        assert_eq!(metadata.title_source, "文件名");
+    }
 }
 
 /// 第二步：正式入库。支持新建、更新已有文献分析、先 PDF 后补 MD。
