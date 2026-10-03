@@ -413,6 +413,13 @@ function onKeydown(e: KeyboardEvent) {
   else if (e.key === 'PageUp' || e.key === 'k') { e.preventDefault(); pageStep(-1) }
 }
 
+interface TextItemEx {
+  str: string
+  transform: number[]
+  width: number
+  height: number
+}
+
 interface PageState {
   index: number
   cssW: number
@@ -513,10 +520,54 @@ async function syncVisible() {
 }
 
 // 直接渲染（由 syncVisible 的串行 for 循环逐页调用，保证同一时刻只有一个 renderTask）
+/** 手动确定性文字层：本 WebView 的 pdf.js renderTextLayer/getTextContent
+ *  异步 promise 间歇性挂起，故只消费一次性预取的 textContent 数据自行定位 span。
+ *  位置由 item.transform 换算（scale1 坐标 × zoom），供选中生成注释。 */
+function renderTextLayerWithContent(
+  index: number,
+  host: HTMLElement | null,
+  tc: { items: TextItemEx[] },
+  pageW1: number,
+  pageH1: number
+) {
+  const target = host && host.isConnected ? host : containerRef.value?.querySelector(`.pdf-page-item[data-page="${index}"] .text-host`) as HTMLElement | null
+  if (!target) return
+  target.innerHTML = ''
+  target.style.setProperty('--scale-factor', String(zoom.value))
+  const frag = document.createDocumentFragment()
+  for (const it of tc.items as TextItemEx[]) {
+    if (!it.str) continue
+    const [a, b, c, d, e, f] = it.transform
+    const fontH = Math.hypot(b, d) || it.height || 10
+    const span = document.createElement('span')
+    span.textContent = it.str
+    span.style.left = `${e * zoom.value}px`
+    span.style.top = `${((pageH1 - f - fontH) / pageH1) * pageH1 * zoom.value}px`
+    span.style.fontSize = `${fontH * zoom.value}px`
+    span.style.fontFamily = 'sans-serif'
+    span.style.width = `${it.width * zoom.value}px`
+    frag.appendChild(span)
+  }
+  target.appendChild(frag)
+  renderedTextLayers.add(index)
+}
+
 async function renderPage(index: number) {
   const doc = props.pdfDoc
   const st = pages.value[index - 1]
-  if (!doc || !st || st.rendered || st.rendering) { return }
+  if (!doc || !st || st.rendering) return
+  // 已渲染但 canvas 因 Vue 重渲染脱离 DOM（切换布局会重建 v-for）→ 重新挂载即可
+  if (st.rendered) {
+    const orphan = renderedCanvases.get(index)
+    if (orphan) {
+      const slot = containerRef.value?.querySelector(`.pdf-page-item[data-page="${index}"] .canvas-slot`)
+      if (slot && slot.firstChild !== orphan) {
+        slot.innerHTML = ''
+        slot.appendChild(orphan)
+      }
+    }
+    return
+  }
   st.rendering = true
   try {
     const page = await doc.getPage(index)
@@ -542,11 +593,11 @@ async function renderPage(index: number) {
       slot.innerHTML = ''
       slot.appendChild(canvas)
     }
-    ;(window as any).__rp.push('appended' + index + '=' + (slot ? slot.children.length : -1))
 
     if (slot) {
-      // 本 WebView 中 renderTask 的 promise 可能不落定（绘制实际完成但回调丢失），
-      // 用超时兜底：超时后继续文字层渲染
+      // 关键顺序：先发起 getTextContent（与渲染任务并发会死锁，必须先取），
+      // 再启动 canvas 渲染；最后用预取内容渲染文字层
+      const tcPromise = page.getTextContent().catch(() => null)
       await new Promise<void>((resolve) => {
         let settled = false
         const done = () => {
@@ -558,7 +609,8 @@ async function renderPage(index: number) {
         page.render({ canvasContext: canvas.getContext('2d')!, viewport: rvp }).promise.then(done, done)
         setTimeout(done, 2500)
       })
-      await renderTextLayer(index, page, vp)
+      const tc = (await Promise.race([tcPromise, new Promise((r) => setTimeout(r, 3000))])) as { items: TextItemEx[] } | null
+      if (tc) renderTextLayerWithContent(index, host2, tc, vp.width / zoom.value, vp.height / zoom.value)
     }
     st.rendered = true
   } catch {
@@ -568,22 +620,32 @@ async function renderPage(index: number) {
   }
 }
 
-/** 可视页文字层：支持选中文字生成注释 */
-async function renderTextLayer(index: number, page: pdfjsLib.PDFPageProxy, viewport: pdfjsLib.PageViewport) {
-  if (renderedTextLayers.has(index)) return
-  const host = containerRef.value?.querySelector(`.pdf-page-item[data-page="${index}"] .text-host`)
+/** 可视页文字层：支持选中文字生成注释。渲染期间 Vue 可能重建 DOM（切换布局），
+ *  完成后检测 host 是否已脱离文档，脱离则用新 host 重试一次。 */
+async function renderTextLayer(index: number, page: pdfjsLib.PDFPageProxy, viewport: pdfjsLib.PageViewport, retry = 0) {
+  if (renderedTextLayers.has(index) && retry === 0) return
+  const host = containerRef.value?.querySelector(`.pdf-page-item[data-page="${index}"] .text-host`) as HTMLElement | null
   if (!host) return
   try {
     host.innerHTML = ''
-    ;(host as HTMLElement).style.setProperty('--scale-factor', String(zoom.value))
+    host.style.setProperty('--scale-factor', String(zoom.value))
     const tc = await page.getTextContent()
-    const task = pdfjsLib.renderTextLayer({
-      textContentSource: tc,
-      container: host as HTMLElement,
-      viewport,
-      textDivs: []
-    })
-    await task.promise
+    // 超时兜底：renderTextLayer 的 promise 在本 WebView 同样可能不落定
+    await Promise.race([
+      pdfjsLib.renderTextLayer({
+        textContentSource: tc,
+        container: host,
+        viewport,
+        textDivs: []
+      }).promise,
+      new Promise((r) => setTimeout(r, 2500))
+    ])
+    // 孤儿检测：渲染期间 DOM 被重建 → 换新 host 重试
+    if (!host.isConnected && retry < 2) {
+      renderedTextLayers.delete(index)
+      await renderTextLayer(index, page, viewport, retry + 1)
+      return
+    }
     renderedTextLayers.add(index)
   } catch {
     // 扫描版 PDF 无文字层
@@ -863,9 +925,13 @@ watch(sidebarMode, (m) => {
   if (m === 'thumbnails') buildThumbs()
 })
 
-// 切换页面布局/方向/模式后组高度变化 → 强制重新计算可见范围
+// 切换页面布局/方向/模式后组结构变化 → 全量拆除 canvas 重渲染（防孤儿元素）
 watch([pageLayout, scrollDir, mode], () => {
   lastSyncedTop = -1
+  renderedCanvases.forEach((c) => { c.width = 0 })
+  renderedCanvases.clear()
+  renderedTextLayers.clear()
+  for (const p of pages.value) p.rendered = false
   nextTick(() => syncVisible())
 })
 
