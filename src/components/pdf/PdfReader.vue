@@ -106,27 +106,33 @@ function groupOf(page: number): number {
   return pageGroups.value.findIndex((g) => g.includes(page))
 }
 
-function rotatePage() {
+async function rotatePage() {
   rotation.value = (rotation.value + 90) % 360
-  // 旋转后占位宽高互换 → 触发重排（高度由计算函数响应）
-  for (const idx of Array.from(renderedCanvases.keys())) {
-    const st = pages.value[idx - 1]
-    if (st) st.rendered = false
-    destroyPage(idx)
+  // viewport 级旋转 → 重算每页 cssW/cssH（宽高互换）→ 全量重渲染
+  const doc = props.pdfDoc
+  if (!doc) return
+  for (const idx of Array.from(renderedCanvases.keys())) destroyPage(idx)
+  const st = pages.value[0]
+  if (st) {
+    const page = await doc.getPage(1)
+    const vp = page.getViewport({ scale: 1, rotation: rotation.value })
+    for (const p of pages.value) {
+      p.cssW = vp.width
+      p.cssH = vp.height
+      p.rendered = false
+    }
   }
+  await nextTick()
   syncVisible()
 }
 
 // 旋转后的页宽高（占位尺寸）
+// viewport 级旋转后 cssW/cssH 已是旋转后的尺寸，直接使用
 function dispW(p: { cssW: number; cssH: number }): number {
-  const w = pageWidth(p as { cssW: number })
-  const h = pageHeight(p as { cssH: number })
-  return rotation.value === 90 || rotation.value === 270 ? h : w
+  return pageWidth(p as { cssW: number })
 }
 function dispH(p: { cssW: number; cssH: number }): number {
-  const w = pageWidth(p as { cssW: number })
-  const h = pageHeight(p as { cssH: number })
-  return rotation.value === 90 || rotation.value === 270 ? w : h
+  return pageHeight(p as { cssH: number })
 }
 
 // ---------- 拖选文字入笔记 ----------
@@ -177,7 +183,7 @@ async function buildThumbs() {
   const list: { index: number; w: number; h: number }[] = []
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i)
-    const vp = page.getViewport({ scale: 1 })
+    const vp = page.getViewport({ scale: 1, rotation: rotation.value })
     list.push({ index: i, w: vp.width, h: vp.height })
   }
   thumbPages.value = list
@@ -433,7 +439,7 @@ async function initPages() {
   const list: PageState[] = []
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i)
-    const vp = page.getViewport({ scale: 1 })
+    const vp = page.getViewport({ scale: 1, rotation: rotation.value })
     list.push({ index: i, cssW: vp.width, cssH: vp.height, rendered: false, rendering: false })
   }
   pages.value = list
@@ -442,31 +448,42 @@ async function initPages() {
 }
 
 // ---------- 懒渲染（滚动位置驱动；IntersectionObserver 在部分 WebView 不触发） ----------
+/** 组高度：组内最高页 + 间距（双页正确判定可见性）。 */
+function groupHeight(group: number[]): number {
+  let max = 0
+  for (const gi of group) {
+    const p = pages.value[gi - 1]
+    if (p) max = Math.max(max, dispH(p))
+  }
+  return max + PAGE_GAP
+}
+
 function visibleRange(): { first: number; last: number } {
   const root = containerRef.value
   if (!root || !pages.value.length) return { first: 1, last: 1 }
-  const top = root.scrollTop
-  const bottom = top + root.clientHeight
+  const horizontal = scrollDir.value === 'horizontal'
+  const top = horizontal ? root.scrollLeft : root.scrollTop
+  const size = horizontal ? root.clientWidth : root.clientHeight
+  const bottom = top + size
   let first = 1
   let last = 1
   let y = 0
-  for (let i = 0; i < pages.value.length; i++) {
-    const h = pageHeight(pages.value[i]) + PAGE_GAP
+  for (const g of pageGroups.value) {
+    const h = groupHeight(g)
     if (y + h > top) {
-      first = i + 1
+      first = g[0]
       break
     }
     y += h
   }
   y = 0
-  for (let i = 0; i < pages.value.length; i++) {
-    const h = pageHeight(pages.value[i]) + PAGE_GAP
+  for (const g of pageGroups.value) {
+    const h = groupHeight(g)
     if (y >= bottom) {
-      last = i
       break
     }
     y += h
-    last = i + 1
+    last = g[g.length - 1]
   }
   return { first: Math.max(1, first), last: Math.min(pages.value.length, last) }
 }
@@ -492,8 +509,10 @@ async function renderPage(index: number) {
   try {
     const page = await doc.getPage(index)
     const dpr = Math.min(window.devicePixelRatio || 1, 2.5)
-    const vp = page.getViewport({ scale: zoom.value })
-    const rvp = page.getViewport({ scale: zoom.value * dpr })
+    // viewport 级旋转：pdf.js 原生处理（canvas 正向渲染，宽高自动换算，文字层同步对齐）
+    const rot = rotation.value
+    const vp = page.getViewport({ scale: zoom.value, rotation: rot })
+    const rvp = page.getViewport({ scale: zoom.value * dpr, rotation: rot })
     let canvas = renderedCanvases.get(index)
     if (!canvas) {
       canvas = document.createElement('canvas')
@@ -511,25 +530,7 @@ async function renderPage(index: number) {
       slot.innerHTML = ''
       slot.appendChild(canvas)
     }
-    // 旋转显示（canvas 内容不变，CSS 变换 + 居中）
-    if (slot) {
-      const item = slot.closest('.pdf-page-item') as HTMLElement | null
-      if (item) {
-        const rot = rotation.value
-        canvas.style.transform = rot ? `rotate(${rot}deg)` : ''
-        if (rot === 90 || rot === 270) {
-          canvas.style.position = 'absolute'
-          canvas.style.left = '50%'
-          canvas.style.top = '50%'
-          canvas.style.transform += ` translate(-50%, -50%)`
-          canvas.style.transform += rot === 90 ? ` translate(${(canvas.offsetHeight - canvas.offsetWidth) / 2}px, ${(canvas.offsetWidth - canvas.offsetHeight) / 2}px)` : ` translate(${(canvas.offsetWidth - canvas.offsetHeight) / 2}px, ${(canvas.offsetHeight - canvas.offsetWidth) / 2}px)`
-        } else {
-          canvas.style.position = ''
-          canvas.style.left = ''
-          canvas.style.top = ''
-        }
-      }
-    }
+
     if (slot) {
       // 本 WebView 中 renderTask 的 promise 可能不落定（绘制实际完成但回调丢失），
       // 用超时兜底：超时后继续文字层渲染
@@ -555,7 +556,7 @@ async function renderPage(index: number) {
 }
 
 /** 可视页文字层：支持选中文字生成注释 */
-async function renderTextLayer(index: number, page: pdfjsLib.PDFPageProxy, viewport: { width: number; height: number }) {
+async function renderTextLayer(index: number, page: pdfjsLib.PDFPageProxy, viewport: pdfjsLib.PageViewport) {
   if (renderedTextLayers.has(index)) return
   const host = containerRef.value?.querySelector(`.pdf-page-item[data-page="${index}"] .text-host`)
   if (!host) return
@@ -604,14 +605,15 @@ function tick() {
         const center = top + (scrollDir.value === 'horizontal' ? root.clientWidth : root.clientHeight) / 2
         let acc = 0
         let cur = 1
-        for (const p of pages.value) {
-          const h = pageHeight(p)
+        for (const g of pageGroups.value) {
+          const h = groupHeight(g)
           if (center <= acc + h) {
-            cur = p.index
+            // 组内取靠视口中心的那页（双页取左/先出现的）
+            cur = g[0]
             break
           }
-          acc += h + PAGE_GAP
-          cur = p.index
+          acc += h
+          cur = g[g.length - 1]
         }
         if (cur !== currentPage.value) {
           currentPage.value = cur
@@ -653,15 +655,16 @@ function setZoom(z: number, keepAnchor = true) {
   const root = containerRef.value
   let anchor: { page: number; ratio: number } | null = null
   if (root && keepAnchor) {
-    const center = root.scrollTop + root.clientHeight / 2
+    const horizontal = scrollDir.value === 'horizontal'
+    const center = (horizontal ? root.scrollLeft : root.scrollTop) + (horizontal ? root.clientWidth : root.clientHeight) / 2
     let acc = 0
-    for (const p of pages.value) {
-      const h = pageHeight(p)
+    for (const g of pageGroups.value) {
+      const h = groupHeight(g)
       if (center <= acc + h) {
-        anchor = { page: p.index, ratio: (center - acc) / h }
+        anchor = { page: g[0], ratio: (center - acc) / h }
         break
       }
-      acc += h + PAGE_GAP
+      acc += h
     }
   }
   zoom.value = Math.min(4, Math.max(0.25, z))
@@ -1711,12 +1714,13 @@ const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
   pointer-events: none;
 }
 
-/* 双页分组 */
+/* 双页分组：垂直模式=横向排列（左右页），水平模式=纵向（因外层已转横向 flex） */
 .page-group {
   display: flex;
   gap: 14px;
   flex: none;
   justify-content: center;
+  align-items: flex-start;
 }
 
 .reader-scroll.horizontal {
