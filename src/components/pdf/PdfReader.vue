@@ -72,11 +72,264 @@ const activeColor = ref<string>('yellow')
 const tool = ref<'select' | 'ink'>('select')
 const inkDrawing = ref<{ page: number; path: AnnotationPoint[] } | null>(null)
 
-// 侧栏
+// 侧栏三态：annotations | thumbnails | outline
+type SidebarMode = 'annotations' | 'thumbnails' | 'outline'
 const sidebarOpen = ref(false)
+const sidebarMode = ref<SidebarMode>('annotations')
 const filterKind = ref('')
 const filterColor = ref('')
 const flashPage = ref<number | null>(null)
+
+function switchSidebar(m: SidebarMode) {
+  if (sidebarMode.value === m && sidebarOpen.value) {
+    sidebarOpen.value = false
+  } else {
+    sidebarMode.value = m
+    sidebarOpen.value = true
+  }
+}
+
+// ---------- 缩略图 ----------
+const thumbPages = ref<{ index: number; w: number; h: number }[]>([])
+const thumbQueue: number[] = []
+let thumbWorking = false
+const renderedThumbs = new Set<number>()
+
+async function buildThumbs() {
+  const doc = props.pdfDoc
+  if (!doc || thumbPages.value.length) return
+  const list: { index: number; w: number; h: number }[] = []
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i)
+    const vp = page.getViewport({ scale: 1 })
+    list.push({ index: i, w: vp.width, h: vp.height })
+  }
+  thumbPages.value = list
+  queueThumbs(currentPage.value)
+}
+
+function queueThumbs(near: number) {
+  const order = [...thumbPages.value.map((t) => t.index)].sort(
+    (a, b) => Math.abs(a - near) - Math.abs(b - near)
+  )
+  for (const i of order) {
+    if (!thumbQueue.includes(i)) thumbQueue.push(i)
+  }
+  pumpThumbs()
+}
+
+async function pumpThumbs() {
+  if (thumbWorking) return
+  thumbWorking = true
+  while (thumbQueue.length) {
+    const idx = thumbQueue.shift()!
+    if (renderedThumbs.has(idx)) continue
+    await new Promise((r) => setTimeout(r, 30))
+    await renderThumb(idx)
+  }
+  thumbWorking = false
+}
+
+async function renderThumb(index: number) {
+  const doc = props.pdfDoc
+  if (!doc) return
+  const host = document.querySelector(`.thumb-item[data-page="${index}"] .thumb-slot`)
+  if (!host) return
+  try {
+    const page = await doc.getPage(index)
+    const scale = 150 / thumbPages.value[index - 1].w
+    const vp = page.getViewport({ scale })
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.floor(vp.width)
+    canvas.height = Math.floor(vp.height)
+    canvas.style.width = '100%'
+    canvas.style.display = 'block'
+    host.innerHTML = ''
+    host.appendChild(canvas)
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const done = () => { if (!settled) { settled = true; resolve() } }
+      page.render({ canvasContext: canvas.getContext('2d')!, viewport: vp }).promise.then(done, done)
+      setTimeout(done, 1200)
+    })
+    renderedThumbs.add(index)
+  } catch {
+    /* 单页缩略图失败忽略 */
+  }
+}
+
+function thumbAnnotations(page: number): string[] {
+  const set = new Set(props.annotations.filter((a) => a.page === page).map((a) => colorHex(a.color)))
+  return Array.from(set).slice(0, 4)
+}
+
+// ---------- 大纲 ----------
+interface OutlineNode {
+  title: string
+  page: number
+  children: OutlineNode[]
+}
+const outline = ref<OutlineNode[] | null>(null)
+
+async function buildOutline() {
+  const doc = props.pdfDoc
+  if (!doc || outline.value !== null) return
+  try {
+    const raw = await doc.getOutline()
+    if (!raw || !raw.length) {
+      outline.value = []
+      return
+    }
+    const toNode = async (item: { title: string; dest: unknown; items: unknown[] }): Promise<OutlineNode> => {
+      let page = 1
+      try {
+        const dest = typeof item.dest === 'string' ? await doc.getDestination(item.dest) : item.dest
+        if (Array.isArray(dest) && dest[0]) {
+          const ref = dest[0]
+          page = (typeof ref === 'object' && ref !== null ? await doc.getPageIndex(ref as { num: number; gen: number }) : 0) + 1
+        }
+      } catch {
+        /* 目的地解析失败留在第 1 页 */
+      }
+      const children: OutlineNode[] = []
+      if (Array.isArray(item.items)) {
+        for (const child of item.items as { title: string; dest: unknown; items: unknown[] }[]) {
+          children.push(await toNode(child))
+        }
+      }
+      return { title: item.title, page, children }
+    }
+    const nodes: OutlineNode[] = []
+    for (const item of raw as { title: string; dest: unknown; items: unknown[] }[]) {
+      nodes.push(await toNode(item))
+    }
+    outline.value = nodes
+  } catch {
+    outline.value = []
+  }
+}
+
+// ---------- Ctrl+F 全文搜索 ----------
+interface SearchHit {
+  page: number
+  snippet: string
+  rect: AnnotationRect
+}
+const searchOpen = ref(false)
+const searchQuery = ref('')
+const searchCase = ref(false)
+const searchHits = ref<SearchHit[]>([])
+const searchIndex: { page: number; text: string; items: { str: string; x: number; y: number; w: number; h: number }[] }[] = []
+const searchActiveIdx = ref(-1)
+const searchHighlight = ref<{ page: number; rect: AnnotationRect } | null>(null)
+const indexedPages = new Set<number>()
+
+async function ensurePageIndex(pageNum: number) {
+  if (indexedPages.has(pageNum)) return
+  indexedPages.add(pageNum)
+  const doc = props.pdfDoc
+  if (!doc) return
+  try {
+    const page = await doc.getPage(pageNum)
+    const vp = page.getViewport({ scale: 1 })
+    const tc = await page.getTextContent()
+    const items = (tc.items as { str: string; transform: number[]; width: number; height: number }[]).map((it) => ({
+      str: it.str,
+      x: it.transform[4] / vp.width,
+      y: (vp.height - it.transform[5] - it.height) / vp.height,
+      w: it.width / vp.width,
+      h: it.height / vp.height
+    }))
+    const text = items.map((i) => i.str).join(' ')
+    searchIndex.push({ page: pageNum, text, items })
+  } catch {
+    /* 跳过 */
+  }
+}
+
+async function buildSearchIndex() {
+  const doc = props.pdfDoc
+  if (!doc) return
+  for (let i = 1; i <= doc.numPages; i++) await ensurePageIndex(i)
+}
+
+async function runSearch() {
+  const q = searchQuery.value.trim()
+  searchHits.value = []
+  searchActiveIdx.value = -1
+  searchHighlight.value = null
+  if (q.length < 1) return
+  if (searchIndex.length < (props.pdfDoc?.numPages || 0)) await buildSearchIndex()
+  const needle = searchCase.value ? q : q.toLowerCase()
+  for (const entry of searchIndex) {
+    const hay = searchCase.value ? entry.text : entry.text.toLowerCase()
+    let from = 0
+    while (true) {
+      const at = hay.indexOf(needle, from)
+      if (at < 0) break
+      let acc = 0
+      let rect: AnnotationRect | null = null
+      for (const it of entry.items) {
+        if (at >= acc && at < acc + it.str.length + 1) {
+          rect = { x: it.x - 0.005, y: it.y - 0.004, w: it.w + 0.01, h: it.h + 0.008 }
+          break
+        }
+        acc += it.str.length + 1
+      }
+      const snippetStart = Math.max(0, at - 14)
+      searchHits.value.push({
+        page: entry.page,
+        snippet: entry.text.slice(snippetStart, snippetStart + q.length + 28),
+        rect: rect || { x: 0.4, y: 0.1, w: 0.2, h: 0.03 }
+      })
+      from = at + q.length
+      if (searchHits.value.length > 300) break
+    }
+  }
+}
+
+function gotoHit(i: number) {
+  const hit = searchHits.value[i]
+  if (!hit) return
+  searchActiveIdx.value = i
+  gotoPage(hit.page)
+  searchHighlight.value = { page: hit.page, rect: hit.rect }
+}
+
+function searchStep(dir: 1 | -1) {
+  if (!searchHits.value.length) return
+  const next = (searchActiveIdx.value + dir + searchHits.value.length) % searchHits.value.length
+  gotoHit(next)
+}
+
+// ---------- 键盘快捷键 ----------
+function focusSearchInput() {
+  nextTick(() => {
+    const el = document.querySelector('.search-panel input') as HTMLInputElement | null
+    el?.focus()
+    el?.select()
+  })
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    searchOpen.value = true
+    focusSearchInput()
+    return
+  }
+  if (searchOpen.value) {
+    if (e.key === 'Escape') {
+      searchOpen.value = false
+      searchHighlight.value = null
+    }
+    return
+  }
+  const tag = (e.target as HTMLElement)?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+  if (e.key === 'PageDown' || e.key === 'j') { e.preventDefault(); pageStep(1) }
+  else if (e.key === 'PageUp' || e.key === 'k') { e.preventDefault(); pageStep(-1) }
+}
 
 interface PageState {
   index: number
@@ -495,6 +748,10 @@ function inkPoints(a: PdfAnnotation, p: PageState): string {
     .join(' ')
 }
 
+watch(sidebarMode, (m) => {
+  if (m === 'thumbnails') buildThumbs()
+})
+
 // ---------- 生命周期 ----------
 watch(() => props.pdfDoc, async (doc) => {
   renderedCanvases.forEach((c) => { c.width = 0 })
@@ -510,12 +767,15 @@ watch(() => props.pdfDoc, async (doc) => {
 onMounted(() => {
   if (props.pdfDoc) {
     initPages().then(() => nextTick()).then(() => syncVisible())
+    buildOutline()
   }
   intervalId = setInterval(tick, 150)
+  window.addEventListener('keydown', onKeydown)
 })
 
 onBeforeUnmount(() => {
   if (intervalId) clearInterval(intervalId)
+  window.removeEventListener('keydown', onKeydown)
 })
 
 const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
@@ -525,9 +785,12 @@ const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
   <div class="pdf-reader">
     <!-- 工具栏 -->
     <div class="reader-toolbar">
-      <el-tooltip content="注释列表" placement="bottom">
-        <el-button size="small" :type="sidebarOpen ? 'primary' : ''" :icon="Collection" @click="sidebarOpen = !sidebarOpen" />
-      </el-tooltip>
+      <el-button-group size="small">
+        <el-button size="small" :type="sidebarOpen && sidebarMode === 'annotations' ? 'primary' : ''" :icon="Collection" title="注释列表" @click="switchSidebar('annotations')" />
+        <el-button size="small" :type="sidebarOpen && sidebarMode === 'thumbnails' ? 'primary' : ''" title="页面缩略图" @click="switchSidebar('thumbnails')">▤</el-button>
+        <el-button size="small" :type="sidebarOpen && sidebarMode === 'outline' ? 'primary' : ''" title="文档大纲" @click="switchSidebar('outline')">☰</el-button>
+      </el-button-group>
+      <el-button size="small" title="查找 (Ctrl+F)" @click="searchOpen = true; focusSearchInput()">⌕</el-button>
       <el-divider direction="vertical" />
       <el-button-group size="small">
         <el-button :icon="ArrowLeft" :disabled="currentPage <= 1" @click="pageStep(-1)" title="上一页" />
@@ -603,39 +866,90 @@ const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
     </div>
 
     <div class="reader-body">
-      <!-- 常驻注释侧栏 -->
+      <!-- 侧栏（三态：注释 / 缩略图 / 大纲） -->
       <aside v-if="sidebarOpen" class="anno-sidebar">
-        <div class="sidebar-head">
-          <span>注释（{{ sidebarList.length }}）</span>
-          <span class="sidebar-filters">
-            <select v-model="filterKind" class="mini-select">
-              <option value="">全部类型</option>
-              <option v-for="(l, k) in KIND_LABEL" :key="k" :value="k">{{ l }}</option>
-            </select>
-            <select v-model="filterColor" class="mini-select">
-              <option value="">全部颜色</option>
-              <option v-for="c in PRESET" :key="c.key" :value="c.key">{{ c.label }}</option>
-            </select>
-          </span>
-        </div>
-        <div class="sidebar-list">
-          <div v-if="sidebarList.length === 0" class="sidebar-empty">暂无注释<br />选中 PDF 文字或用墨迹工具添加</div>
-          <div
-            v-for="a in sidebarList"
-            :key="a.id"
-            class="sidebar-item"
-            @click="jumpToAnnotation(a)"
-          >
-            <span class="item-dot" :style="{ background: colorHex(a.color) }"></span>
-            <div class="item-main">
-              <div class="item-head">
-                第 {{ a.page }} 页 · {{ KIND_LABEL[a.kind] || a.kind }}
-                <span v-for="t in a.tags" :key="t" class="item-tag">{{ t }}</span>
+        <!-- 注释 -->
+        <template v-if="sidebarMode === 'annotations'">
+          <div class="sidebar-head">
+            <span>注释（{{ sidebarList.length }}）</span>
+            <span class="sidebar-filters">
+              <select v-model="filterKind" class="mini-select">
+                <option value="">全部类型</option>
+                <option v-for="(l, k) in KIND_LABEL" :key="k" :value="k">{{ l }}</option>
+              </select>
+              <select v-model="filterColor" class="mini-select">
+                <option value="">全部颜色</option>
+                <option v-for="c in PRESET" :key="c.key" :value="c.key">{{ c.label }}</option>
+              </select>
+            </span>
+          </div>
+          <div class="sidebar-list">
+            <div v-if="sidebarList.length === 0" class="sidebar-empty">暂无注释<br />选中 PDF 文字或用墨迹工具添加</div>
+            <div
+              v-for="a in sidebarList"
+              :key="a.id"
+              class="sidebar-item"
+              @click="jumpToAnnotation(a)"
+            >
+              <span class="item-dot" :style="{ background: colorHex(a.color) }"></span>
+              <div class="item-main">
+                <div class="item-head">
+                  第 {{ a.page }} 页 · {{ KIND_LABEL[a.kind] || a.kind }}
+                  <span v-for="t in a.tags" :key="t" class="item-tag">{{ t }}</span>
+                </div>
+                <div class="item-text">{{ a.text || a.quote || '（无备注）' }}</div>
               </div>
-              <div class="item-text">{{ a.text || a.quote || '（无备注）' }}</div>
             </div>
           </div>
-        </div>
+        </template>
+
+        <!-- 缩略图 -->
+        <template v-else-if="sidebarMode === 'thumbnails'">
+          <div class="sidebar-head"><span>页面（{{ pageCount }}）</span></div>
+          <div class="sidebar-list thumb-list">
+            <div
+              v-for="t in thumbPages"
+              :key="t.index"
+              class="thumb-item"
+              :data-page="t.index"
+              :class="{ active: t.index === currentPage }"
+              @click="gotoPage(t.index)"
+            >
+              <div class="thumb-slot" :style="{ height: Math.round(150 * t.h / t.w) + 'px' }"></div>
+              <span v-for="(c, ci) in thumbAnnotations(t.index)" :key="ci" class="thumb-dot" :style="{ background: c }"></span>
+              <span class="thumb-num">{{ t.index }}</span>
+            </div>
+          </div>
+        </template>
+
+        <!-- 大纲 -->
+        <template v-else>
+          <div class="sidebar-head"><span>大纲</span></div>
+          <div class="sidebar-list outline-list">
+            <div v-if="outline === null" class="sidebar-empty">加载中…</div>
+            <div v-else-if="outline.length === 0" class="sidebar-empty">此 PDF 没有内嵌大纲<br />可用左侧缩略图或页码导航</div>
+            <template v-else>
+              <div v-for="n0 in outline" :key="n0.title">
+                <div class="outline-item" @click="gotoPage(n0.page)">
+                  <span class="outline-title">{{ n0.title }}</span>
+                  <span class="outline-page">{{ n0.page }}</span>
+                </div>
+                <div v-for="n1 in n0.children" :key="n1.title">
+                  <div class="outline-item lv2" @click="gotoPage(n1.page)">
+                    <span class="outline-title">{{ n1.title }}</span>
+                    <span class="outline-page">{{ n1.page }}</span>
+                  </div>
+                  <div v-for="n2 in n1.children" :key="n2.title">
+                    <div class="outline-item lv3" @click="gotoPage(n2.page)">
+                      <span class="outline-title">{{ n2.title }}</span>
+                      <span class="outline-page">{{ n2.page }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
       </aside>
 
       <!-- 滚动容器 -->
@@ -718,7 +1032,49 @@ const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
               />
             </g>
           </svg>
+          <!-- 搜索命中高亮 -->
+          <div
+            v-if="searchHighlight && searchHighlight.page === p.index"
+            class="search-hl"
+            :style="{
+              left: searchHighlight.rect.x * pageWidth(p) + 'px',
+              top: searchHighlight.rect.y * pageHeight(p) + 'px',
+              width: searchHighlight.rect.w * pageWidth(p) + 'px',
+              height: searchHighlight.rect.h * pageHeight(p) + 'px'
+            }"
+          ></div>
           <span class="page-badge">{{ p.index }}</span>
+        </div>
+
+        <!-- Ctrl+F 搜索面板 -->
+        <div v-if="searchOpen" class="search-panel">
+          <input
+            v-model="searchQuery"
+            class="search-input"
+            placeholder="在文档中查找…  (Enter 下一处 / Shift+Enter 上一处 / Esc 关闭)"
+            @keydown.enter.prevent="searchHits.length ? searchStep($event.shiftKey ? -1 : 1) : runSearch()"
+            @keydown.esc="searchOpen = false; searchHighlight = null"
+          />
+          <button class="search-btn" title="大小写敏感" :class="{ on: searchCase }" @click="searchCase = !searchCase; runSearch()">Aa</button>
+          <button class="search-btn" title="查找" @click="runSearch">⌕</button>
+          <span class="search-count">
+            {{ searchHits.length ? (searchActiveIdx >= 0 ? searchActiveIdx + 1 + ' / ' : '') + searchHits.length + ' 处' : (searchQuery ? '无结果' : '') }}
+          </span>
+          <button class="search-btn" :disabled="!searchHits.length" @click="searchStep(-1)">↑</button>
+          <button class="search-btn" :disabled="!searchHits.length" @click="searchStep(1)">↓</button>
+          <button class="search-btn" title="收起结果" v-if="searchHits.length">▾</button>
+          <div v-if="searchHits.length" class="search-results">
+            <div
+              v-for="(h, i) in searchHits.slice(0, 50)"
+              :key="i"
+              class="search-result-item"
+              :class="{ active: i === searchActiveIdx }"
+              @click="gotoHit(i)"
+            >
+              <span class="sr-page">P{{ h.page }}</span>
+              <span class="sr-text">{{ h.snippet }}</span>
+            </div>
+          </div>
         </div>
 
         <!-- 选中浮条 -->
@@ -1022,6 +1378,220 @@ const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
   padding: 0 7px;
   pointer-events: none;
   z-index: 4;
+}
+
+/* 缩略图 */
+.thumb-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 6px;
+}
+
+.thumb-item {
+  position: relative;
+  width: 150px;
+  background: #fff;
+  border: 2px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.18);
+}
+
+.thumb-item:hover {
+  border-color: var(--el-color-primary-light-5);
+}
+
+.thumb-item.active {
+  border-color: var(--el-color-primary);
+}
+
+.thumb-slot {
+  width: 100%;
+  background: #f0f2f5;
+  overflow: hidden;
+}
+
+.thumb-num {
+  position: absolute;
+  bottom: 3px;
+  right: 5px;
+  font-size: 10px;
+  color: #666;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 6px;
+  padding: 0 5px;
+}
+
+.thumb-dot {
+  position: absolute;
+  top: 3px;
+  left: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+.thumb-dot:nth-child(3) { left: 14px; }
+.thumb-dot:nth-child(4) { left: 23px; }
+.thumb-dot:nth-child(5) { left: 32px; }
+
+/* 大纲 */
+.outline-list {
+  padding: 6px 4px;
+}
+
+.outline-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.outline-item:hover {
+  background: var(--el-color-primary-light-9);
+}
+
+.outline-item.lv2 { padding-left: 20px; }
+.outline-item.lv3 { padding-left: 34px; }
+
+.outline-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outline-page {
+  flex: none;
+  color: #a8abb2;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 搜索面板 */
+.search-panel {
+  position: absolute;
+  top: 10px;
+  right: 18px;
+  z-index: 12;
+  width: 340px;
+  background: #fff;
+  border: 1px solid #e2e5ea;
+  border-radius: 8px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  flex-wrap: wrap;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 150px;
+  border: 1px solid #e2e5ea;
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--el-color-primary);
+}
+
+.search-btn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: #4b5058;
+  font-size: 13px;
+}
+
+.search-btn:hover:not(:disabled) {
+  background: #f0f2f5;
+}
+
+.search-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.search-btn.on {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-weight: 700;
+}
+
+.search-count {
+  font-size: 11.5px;
+  color: #8f959e;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.search-results {
+  flex-basis: 100%;
+  max-height: 220px;
+  overflow-y: auto;
+  border-top: 1px solid #eceef2;
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.search-result-item {
+  display: flex;
+  gap: 7px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  align-items: baseline;
+}
+
+.search-result-item:hover {
+  background: #f5f7fa;
+}
+
+.search-result-item.active {
+  background: var(--el-color-primary-light-9);
+}
+
+.sr-page {
+  flex: none;
+  color: var(--el-color-primary);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.sr-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #4b5058;
+}
+
+/* 搜索命中高亮 */
+.search-hl {
+  position: absolute;
+  z-index: 5;
+  background: rgba(255, 213, 0, 0.45);
+  border: 1px solid rgba(240, 170, 0, 0.85);
+  border-radius: 2px;
+  pointer-events: none;
 }
 
 /* 选中浮条 */
