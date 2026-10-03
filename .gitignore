@@ -12,3 +12,7 @@ src-tauri/gen/schemas/
 # 构建产物（EXE 不入库，用 npm run tauri build 现打）
 *.exe
 *.exe.bak
+
+# Codex 生成的过程证据目录
+codex-*.json
+.codex-*/
