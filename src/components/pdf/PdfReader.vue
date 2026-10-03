@@ -68,6 +68,82 @@ const mode = ref<'vertical' | 'paged'>(props.initialMode === 'paged' ? 'paged' :
 const currentPage = ref(props.initialPage || 1)
 const activeColor = ref<string>('yellow')
 
+// 批次4：页面布局 / 滚动方向 / 旋转 / 深色
+type PageLayout = 'single' | 'double' | 'double-cover'
+const pageLayout = ref<PageLayout>('single')
+const scrollDir = ref<'vertical' | 'horizontal'>('vertical')
+const rotation = ref(0) // 0 | 90 | 180 | 270
+type DarkMode = 'light' | 'dark' | 'system'
+const darkSetting = ref<DarkMode>('light')
+const systemDark = ref(false)
+const isDark = computed(() =>
+  darkSetting.value === 'dark' || (darkSetting.value === 'system' && systemDark.value)
+)
+
+let darkMq: MediaQueryList | null = null
+function watchSystemDark() {
+  darkMq = window.matchMedia('(prefers-color-scheme: dark)')
+  systemDark.value = darkMq.matches
+  darkMq.addEventListener?.('change', (e) => (systemDark.value = e.matches))
+}
+
+// 双页分组：double=1,2 3,4…；double-cover=1 | 2,3 4,5…
+const pageGroups = computed(() => {
+  const n = pages.value.length
+  const groups: number[][] = []
+  if (pageLayout.value === 'single') {
+    for (let i = 1; i <= n; i++) groups.push([i])
+  } else if (pageLayout.value === 'double') {
+    for (let i = 1; i <= n; i += 2) groups.push(i + 1 <= n ? [i, i + 1] : [i])
+  } else {
+    groups.push([1])
+    for (let i = 2; i <= n; i += 2) groups.push(i + 1 <= n ? [i, i + 1] : [i])
+  }
+  return groups
+})
+
+function groupOf(page: number): number {
+  return pageGroups.value.findIndex((g) => g.includes(page))
+}
+
+function rotatePage() {
+  rotation.value = (rotation.value + 90) % 360
+  // 旋转后占位宽高互换 → 触发重排（高度由计算函数响应）
+  for (const idx of Array.from(renderedCanvases.keys())) {
+    const st = pages.value[idx - 1]
+    if (st) st.rendered = false
+    destroyPage(idx)
+  }
+  syncVisible()
+}
+
+// 旋转后的页宽高（占位尺寸）
+function dispW(p: { cssW: number; cssH: number }): number {
+  const w = pageWidth(p as { cssW: number })
+  const h = pageHeight(p as { cssH: number })
+  return rotation.value === 90 || rotation.value === 270 ? h : w
+}
+function dispH(p: { cssW: number; cssH: number }): number {
+  const w = pageWidth(p as { cssW: number })
+  const h = pageHeight(p as { cssH: number })
+  return rotation.value === 90 || rotation.value === 270 ? w : h
+}
+
+// ---------- 拖选文字入笔记 ----------
+const dragPayload = ref<{ quote: string; page: number } | null>(null)
+
+function onDragStart(e: DragEvent) {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed) return
+  const host = sel.anchorNode?.parentElement?.closest('.text-host')
+  if (!host) return
+  const pageEl = host.closest('.pdf-page-item') as HTMLElement
+  dragPayload.value = { quote: sel.toString().replace(/\s+/g, ' ').trim(), page: Number(pageEl?.dataset.page || 0) }
+  e.dataTransfer?.setData('text/plain', dragPayload.value.quote)
+  e.dataTransfer?.setData('app/page', String(dragPayload.value.page))
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copyLink'
+}
+
 // 工具状态：select=选择文字 / ink=墨迹
 const tool = ref<'select' | 'ink'>('select')
 const inkDrawing = ref<{ page: number; path: AnnotationPoint[] } | null>(null)
@@ -435,6 +511,25 @@ async function renderPage(index: number) {
       slot.innerHTML = ''
       slot.appendChild(canvas)
     }
+    // 旋转显示（canvas 内容不变，CSS 变换 + 居中）
+    if (slot) {
+      const item = slot.closest('.pdf-page-item') as HTMLElement | null
+      if (item) {
+        const rot = rotation.value
+        canvas.style.transform = rot ? `rotate(${rot}deg)` : ''
+        if (rot === 90 || rot === 270) {
+          canvas.style.position = 'absolute'
+          canvas.style.left = '50%'
+          canvas.style.top = '50%'
+          canvas.style.transform += ` translate(-50%, -50%)`
+          canvas.style.transform += rot === 90 ? ` translate(${(canvas.offsetHeight - canvas.offsetWidth) / 2}px, ${(canvas.offsetWidth - canvas.offsetHeight) / 2}px)` : ` translate(${(canvas.offsetWidth - canvas.offsetHeight) / 2}px, ${(canvas.offsetHeight - canvas.offsetWidth) / 2}px)`
+        } else {
+          canvas.style.position = ''
+          canvas.style.left = ''
+          canvas.style.top = ''
+        }
+      }
+    }
     if (slot) {
       // 本 WebView 中 renderTask 的 promise 可能不落定（绘制实际完成但回调丢失），
       // 用超时兜底：超时后继续文字层渲染
@@ -502,11 +597,11 @@ function tick() {
   try {
     const root = containerRef.value
     if (root && pages.value.length) {
-      const top = root.scrollTop
+      const top = scrollDir.value === 'horizontal' ? root.scrollLeft : root.scrollTop
       if (Math.abs(top - lastSyncedTop) > 24) {
         lastSyncedTop = top
         syncVisible()
-        const center = top + root.clientHeight / 2
+        const center = top + (scrollDir.value === 'horizontal' ? root.clientWidth : root.clientHeight) / 2
         let acc = 0
         let cur = 1
         for (const p of pages.value) {
@@ -771,6 +866,7 @@ onMounted(() => {
   }
   intervalId = setInterval(tick, 150)
   window.addEventListener('keydown', onKeydown)
+  watchSystemDark()
 })
 
 onBeforeUnmount(() => {
@@ -855,14 +951,22 @@ const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
           @click="tool = 'ink'"
         >墨迹</el-button>
       </el-button-group>
-      <el-tooltip :content="mode === 'vertical' ? '连续滚动（点击切翻页）' : '翻页模式（点击切连续滚动）'" placement="bottom">
-        <el-button
-          size="small"
-          :type="mode === 'paged' ? 'primary' : ''"
-          :icon="mode === 'paged' ? Sort : Reading"
-          @click="mode = mode === 'vertical' ? 'paged' : 'vertical'; emit('mode-change', mode)"
-        />
-      </el-tooltip>
+      <el-button-group size="small">
+        <el-button size="small" :type="pageLayout === 'single' ? 'primary' : ''" title="单页视图" @click="pageLayout = 'single'">▯</el-button>
+        <el-button size="small" :type="pageLayout === 'double' ? 'primary' : ''" title="双页视图" @click="pageLayout = 'double'">▯▯</el-button>
+        <el-button size="small" :type="pageLayout === 'double-cover' ? 'primary' : ''" title="双页含封面（首页单独）" @click="pageLayout = 'double-cover'">◫</el-button>
+      </el-button-group>
+      <el-button-group size="small">
+        <el-button size="small" :type="scrollDir === 'vertical' ? 'primary' : ''" :icon="Reading" title="垂直滚动" @click="scrollDir = 'vertical'" />
+        <el-button size="small" :type="scrollDir === 'horizontal' ? 'primary' : ''" :icon="Sort" title="水平滚动" @click="scrollDir = 'horizontal'" />
+        <el-button size="small" :type="mode === 'paged' ? 'primary' : ''" title="翻页模式（snap）" @click="mode = mode === 'vertical' ? 'paged' : 'vertical'; emit('mode-change', mode)">↷</el-button>
+      </el-button-group>
+      <el-button size="small" title="旋转 90°" @click="rotatePage">⟳</el-button>
+      <el-button-group size="small">
+        <el-button size="small" :type="darkSetting === 'light' ? 'primary' : ''" title="浅色" @click="darkSetting = 'light'">☀</el-button>
+        <el-button size="small" :type="darkSetting === 'dark' ? 'primary' : ''" title="深色（PDF 反色护眼）" @click="darkSetting = 'dark'">🌙</el-button>
+        <el-button size="small" :type="darkSetting === 'system' ? 'primary' : ''" title="跟随系统" @click="darkSetting = 'system'">◐</el-button>
+      </el-button-group>
     </div>
 
     <div class="reader-body">
@@ -956,20 +1060,32 @@ const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
       <div
         ref="containerRef"
         class="reader-scroll"
-        :class="{ paged: mode === 'paged', 'tool-ink': tool === 'ink' }"
+        :class="{
+          paged: mode === 'paged',
+          'tool-ink': tool === 'ink',
+          horizontal: scrollDir === 'horizontal',
+          dark: isDark
+        }"
         @wheel="onWheel"
         @mouseup="onMouseUp"
         @pointerdown="onInkPointerDown"
         @pointermove="onInkPointerMove"
         @pointerup="onInkPointerUp"
+        @dragstart="onDragStart"
       >
         <div
-          v-for="p in pages"
-          :key="p.index"
+          v-for="g in pageGroups"
+          :key="g[0]"
+          class="page-group"
+          :style="scrollDir === 'horizontal' ? { flexDirection: 'column' } : {}"
+        >
+        <div
+          v-for="p in g.map((gi) => pages[gi - 1]).filter(Boolean)"
+          :key="p!.index"
           class="pdf-page-item"
-          :data-page="p.index"
-          :class="{ flash: flashPage === p.index }"
-          :style="{ height: pageHeight(p) + 'px', width: pageWidth(p) + 'px' }"
+          :data-page="p!.index"
+          :class="{ flash: flashPage === p!.index, rotated: rotation === 90 || rotation === 270 }"
+          :style="{ height: dispH(p!) + 'px', width: dispW(p!) + 'px' }"
         >
           <div class="canvas-slot"></div>
           <div class="text-host textLayer"></div>
@@ -1044,6 +1160,7 @@ const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
             }"
           ></div>
           <span class="page-badge">{{ p.index }}</span>
+        </div>
         </div>
 
         <!-- Ctrl+F 搜索面板 -->
@@ -1592,6 +1709,40 @@ const ZOOM_OPTIONS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
   border: 1px solid rgba(240, 170, 0, 0.85);
   border-radius: 2px;
   pointer-events: none;
+}
+
+/* 双页分组 */
+.page-group {
+  display: flex;
+  gap: 14px;
+  flex: none;
+  justify-content: center;
+}
+
+.reader-scroll.horizontal {
+  flex-direction: row;
+  align-items: flex-start;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.reader-scroll.horizontal .page-group {
+  flex-direction: column;
+}
+
+/* 深色模式：PDF 反色（页面+文字层），注释色补偿 */
+.reader-scroll.dark .canvas-slot,
+.reader-scroll.dark .text-host {
+  filter: invert(1) hue-rotate(180deg);
+  background: #1b1b1b;
+}
+
+.reader-scroll.dark .anno-svg {
+  filter: invert(1) hue-rotate(180deg) saturate(1.6);
+}
+
+.reader-scroll.dark .pdf-page-item {
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.7);
 }
 
 /* 选中浮条 */

@@ -336,6 +336,8 @@ async function renderTextLayerNow(page: pdfjsLib.PDFPageProxy, viewport: { width
 
 // ---- PdfReader 桥接 ----
 const readerRef = ref<InstanceType<typeof PdfReader> | null>(null)
+// 最近一次拖选的页码（PdfReader dragstart 写入 dataTransfer 'app/page'）
+const lastQuotePage = ref<number | null>(null)
 const readerMode = ref<'vertical' | 'paged'>('vertical')
 
 function gotoPage(p: number) {
@@ -590,6 +592,19 @@ async function setReadingStatus(s: string) {
   }
 }
 
+/** PDF 拖选文字入笔记：生成引用块（题录 + 页码 + 原文）。 */
+function onNoteDrop(e: DragEvent) {
+  const text = e.dataTransfer?.getData('text/plain')?.trim()
+  if (!text) return
+  const page = Number(e.dataTransfer?.getData('app/page') || 0)
+  lastQuotePage.value = page || null
+  const paperTitle = paper.value?.title || '未知文献'
+  const cite = `> ${text}\n\n—— ${paperTitle}${lastQuotePage.value ? `（PDF 第 ${lastQuotePage.value} 页）` : ''}\n\n`
+  noteText.value = (noteText.value ? noteText.value + '\n' : '') + cite
+  noteDirty.value = true
+  toastOk('已作为引用块加入笔记')
+}
+
 function addToCompare() {
   const r = addToBasket(paperId)
   if (!r.added) {
@@ -789,7 +804,13 @@ watch(mode, (m) => {
             <template v-if="noteDirty">…</template>
             <template v-else-if="noteSavedAt">（已保存）</template>
           </div>
-          <MarkdownEditor v-model="noteText" placeholder="用 Markdown 记录你的研究判断、疑问和结论…（左侧编辑，右侧实时预览）" />
+          <div
+            class="note-drop-zone"
+            @dragover.prevent
+            @drop.prevent="onNoteDrop"
+          >
+            <MarkdownEditor v-model="noteText" placeholder="用 Markdown 记录你的研究判断、疑问和结论…（左侧编辑，右侧实时预览；可从 PDF 拖选文字进来）" />
+          </div>
         </div>
 
         <!-- 编辑视图 -->
@@ -1306,6 +1327,22 @@ watch(mode, (m) => {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.note-drop-zone {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.note-drop-zone :deep(.md-editor-wrap) {
+  flex: 1;
+}
+
+/* 拖入高亮 */
+.note-drop-zone:drag-over {
+  outline: 2px dashed var(--el-color-primary);
 }
 
 /* 笔记与编辑 */

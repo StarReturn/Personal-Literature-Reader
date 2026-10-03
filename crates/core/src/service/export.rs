@@ -103,6 +103,36 @@ pub fn export_paper(
         }
     }
 
+    // PDF 注释段落（批次4）：类型/颜色/页码/摘录/备注随单篇导出
+    {
+        let annos = crate::service::annotations::list_annotations(state, paper_id)?;
+        if !annos.is_empty() {
+            out.push_str("\n## PDF 注释\n\n");
+            for a in annos {
+                let kind = match a.kind.as_str() {
+                    "highlight" => "高亮",
+                    "underline" => "下划线",
+                    "strike" => "删除线",
+                    "rect" => "框选",
+                    "note" => "便签",
+                    "ink" => "墨迹",
+                    other => other,
+                };
+                out.push_str(&format!("- **第 {} 页 · {} · {}**", a.page, kind, a.color));
+                if !a.tags.is_empty() {
+                    out.push_str(&format!(" · 标签：{}", a.tags.join("、")));
+                }
+                out.push('\n');
+                if !a.quote.is_empty() {
+                    out.push_str(&format!("  > {}\n", a.quote.replace('\n', " ")));
+                }
+                if !a.text.is_empty() {
+                    out.push_str(&format!("  - 备注：{}\n", a.text.replace('\n', " ")));
+                }
+            }
+        }
+    }
+
     let filename = format!("{}.md", sanitize_filename(&item.title));
     Ok(ExportResult {
         filename,
