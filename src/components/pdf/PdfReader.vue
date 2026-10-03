@@ -488,23 +488,35 @@ function visibleRange(): { first: number; last: number } {
   return { first: Math.max(1, first), last: Math.min(pages.value.length, last) }
 }
 
-function syncVisible() {
-  const { first, last } = visibleRange()
-  const BUFFER = 2
-  const from = Math.max(1, first - BUFFER)
-  const to = Math.min(pages.value.length, last + BUFFER)
-  for (let i = from; i <= to; i++) {
-    renderPage(i)
-  }
-  for (const idx of Array.from(renderedCanvases.keys())) {
-    if (idx < from || idx > to) destroyPage(idx)
+let syncing = false
+async function syncVisible() {
+  if (syncing) return
+  syncing = true
+  try {
+    const { first, last } = visibleRange()
+    const BUFFER = 2
+    const from = Math.max(1, first - BUFFER)
+    const to = Math.min(pages.value.length, last + BUFFER)
+    // 先销毁范围外页面
+    for (const idx of Array.from(renderedCanvases.keys())) {
+      if (idx < from || idx > to) destroyPage(idx)
+    }
+    // 串行渲染范围内页面（同一时刻只有一个 renderTask，避免 WebView 并发阻塞）
+    for (let i = from; i <= to; i++) {
+      const st = pages.value[i - 1]
+      if (!st || st.rendered || st.rendering) continue
+      await renderPage(i)
+    }
+  } finally {
+    syncing = false
   }
 }
 
+// 直接渲染（由 syncVisible 的串行 for 循环逐页调用，保证同一时刻只有一个 renderTask）
 async function renderPage(index: number) {
   const doc = props.pdfDoc
   const st = pages.value[index - 1]
-  if (!doc || !st || st.rendered || st.rendering) return
+  if (!doc || !st || st.rendered || st.rendering) { return }
   st.rendering = true
   try {
     const page = await doc.getPage(index)
@@ -522,14 +534,15 @@ async function renderPage(index: number) {
     canvas.height = Math.floor(rvp.height)
     canvas.style.width = `${Math.floor(vp.width)}px`
     canvas.style.height = `${Math.floor(vp.height)}px`
-    st.cssW = Math.floor(vp.width)
-    st.cssH = Math.floor(vp.height)
+    // 注意：不在此处赋 st.cssW/cssH——initPages 已设置占位尺寸；
+    // 此处赋值会触发 Vue 响应式重渲染 v-for，重建 DOM 导致手动 append 的 canvas 丢失
     // 先挂载再渲染：离屏 canvas 的 render 在部分 WebView 会挂起
     const slot = containerRef.value?.querySelector(`.pdf-page-item[data-page="${index}"] .canvas-slot`)
     if (slot && slot.firstChild !== canvas) {
       slot.innerHTML = ''
       slot.appendChild(canvas)
     }
+    ;(window as any).__rp.push('appended' + index + '=' + (slot ? slot.children.length : -1))
 
     if (slot) {
       // 本 WebView 中 renderTask 的 promise 可能不落定（绘制实际完成但回调丢失），
@@ -848,6 +861,12 @@ function inkPoints(a: PdfAnnotation, p: PageState): string {
 
 watch(sidebarMode, (m) => {
   if (m === 'thumbnails') buildThumbs()
+})
+
+// 切换页面布局/方向/模式后组高度变化 → 强制重新计算可见范围
+watch([pageLayout, scrollDir, mode], () => {
+  lastSyncedTop = -1
+  nextTick(() => syncVisible())
 })
 
 // ---------- 生命周期 ----------
