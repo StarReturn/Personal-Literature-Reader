@@ -79,13 +79,6 @@ export interface ImportPreview {
   temp_token: string
   pdf: { sha256: string; size: number; page_count: number | null; page_count_error: string | null } | null
   md: ParsedAnalysis | null
-  suggested_metadata: {
-    title: string
-    authors: string[]
-    year: number | null
-    doi: string
-    title_source: string
-  } | null
   page_warnings: string[]
   duplicates: { paper_id: string; title: string; reason: string }[]
   pairing_hint: string | null
@@ -524,6 +517,145 @@ export const api = {
       return null
     }
     return null
+  },
+
+  getTemplate(): Promise<{ filename: string; content: string }> {
+    if (isTauri) return tauriInvoke('get_template')
+    return httpJson('GET', '/api/template')
+  },
+
+  // ---------- 桌宠（仅桌面 Tauri 模式） ----------
+  async petGetConfig(): Promise<{ enabled: boolean; has_image: boolean; image_name: string } | null> {
+    if (!isTauri) return null
+    return tauriInvoke('pet_get_config')
+  },
+
+  async petSetEnabled(enabled: boolean): Promise<void> {
+    if (!isTauri) return
+    return tauriInvoke('pet_set_enabled', { enabled })
+  },
+
+  async petSetImage(file: File): Promise<void> {
+    if (!isTauri) return
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const ext = (file.name.split('.').pop() || 'png').toLowerCase()
+    return tauriInvoke('pet_set_image', { bytes: Array.from(bytes), ext })
+  },
+
+  /** 桌面模式：按路径读取文件字节（PDF 文本提取用）。 */
+  async readBinaryFile(path: string): Promise<Uint8Array | null> {
+    if (!isTauri) return null
+    const r = await tauriInvoke<number[]>('read_binary_file', { path })
+    return r ? new Uint8Array(r) : null
+  },
+
+  // ---------- AI 服务 ----------
+  async aiGetConfig(): Promise<AiConfig> {
+    if (isTauri) return tauriInvoke('ai_get_config')
+    return httpJson('GET', '/api/ai/config')
+  },
+
+  async aiSetConfig(cfg: AiConfig): Promise<void> {
+    if (isTauri) return tauriInvoke('ai_set_config', { cfg })
+    return httpJson('PUT', '/api/ai/config', cfg)
+  },
+
+  async aiTestConnection(): Promise<{ ok: boolean; reply: string }> {
+    if (isTauri) return tauriInvoke('ai_test_connection')
+    return httpJson('POST', '/api/ai/test', {})
+  },
+
+  /** 流式生成文献分析：Tauri 走事件，浏览器走 SSE。返回完整文本，onDelta 实时回调。 */
+  async aiGenerateAnalysis(
+    pdfText: string,
+    extraInstructions: string,
+    onDelta?: (delta: string) => void
+  ): Promise<string> {
+    if (isTauri) {
+      const { listen } = await import('@tauri-apps/api/event')
+      let unListen: (() => void) | null = null
+      try {
+        unListen = await listen<string>('ai_chunk', (e) => {
+          onDelta?.(e.payload)
+        })
+        return await tauriInvoke<string>('ai_generate_analysis', {
+          pdfText,
+          extraInstructions: extraInstructions || null
+        })
+      } finally {
+        unListen?.()
+      }
+    }
+    const res = await fetch('/api/ai/generate-analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pdf_text: pdfText, extra_instructions: extraInstructions })
+    })
+    if (!res.ok || !res.body) {
+      const errText = await res.text().catch(() => '')
+      throw new Error('AI 请求失败 ' + res.status + ' ' + errText.slice(0, 120))
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let full = ''
+    let done = false
+    while (!done) {
+      const { done: rdDone, value } = await reader.read()
+      if (rdDone) break
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() || ''
+      for (const part of parts) {
+        const line = part.trim()
+        if (!line.startsWith('data:')) continue
+        const payload = line.slice(5).trim()
+        try {
+          const v = JSON.parse(payload)
+          if (v.error) throw new Error(v.error)
+          if (v.done) {
+            done = true
+            full = v.full
+          } else if (v.delta) {
+            full += v.delta
+            onDelta?.(v.delta)
+          }
+        } catch (e) {
+          if (e instanceof SyntaxError) continue
+          throw e
+        }
+      }
+    }
+    return full
+  },
+
+  /** 桌面模式：按对话框返回的路径导入形象。 */
+  async petSetImagePath(path: string): Promise<void> {
+    if (!isTauri) return
+    return tauriInvoke('pet_set_image_path', { path })
+  },
+
+  async petGetImage(): Promise<Uint8Array | null> {
+    if (!isTauri) return null
+    const r = await tauriInvoke<number[]>('pet_get_image')
+    return r && r.length ? new Uint8Array(r) : null
+  },
+
+  /** 保存文本文件：桌面模式弹出另存为写磁盘；浏览器模式触发下载。 */
+  async saveText(filename: string, content: string): Promise<void> {
+    if (isTauri) {
+      const { save } = await import('@tauri-apps/plugin-dialog')
+      const path = await save({ defaultPath: filename })
+      if (!path) return
+      return tauriInvoke('save_text_file', { path, content })
+    }
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
   },
 
   /** 选择目录。桌面模式返回路径；浏览器模式返回 null（由用户手动输入路径）。 */

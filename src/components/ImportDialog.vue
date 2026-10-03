@@ -23,12 +23,12 @@ const emit = defineEmits<{ (e: 'imported'): void }>()
 const store = useLibraryStore()
 const FIXED_SECTIONS = ['一句话总结', '研究问题', '研究方法', '样本与数据', '主要发现', '创新点', '局限性', '阅读重点']
 
-const activeTab = ref<'single' | 'batch'>('single')
+const activeTab = ref<'smart' | 'single' | 'batch'>('smart')
 
 watch(visible, (v) => {
   if (v) {
     store.ensureLoaded().catch(() => undefined)
-    activeTab.value = 'single'
+    activeTab.value = 'smart'
     resetSingle()
     resetBatch()
   } else {
@@ -122,6 +122,8 @@ async function getPdfBytesForAi(): Promise<Uint8Array | null> {
 
 async function extractPdfText(bytes: Uint8Array): Promise<string> {
   const pdfjs = await import('pdfjs-dist')
+  const workerMod = await import('pdfjs-dist/build/pdf.worker.min.js?url')
+  pdfjs.GlobalWorkerOptions.workerSrc = workerMod.default
   const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise
   const parts: string[] = []
   for (let i = 1; i <= doc.numPages; i++) {
@@ -243,6 +245,131 @@ async function commit() {
     toastError(String((e as Error).message || e))
   } finally {
     committing.value = false
+  }
+}
+
+/* ==================== 智能导入：选 PDF → AI 全自动（元数据+分析）→ 直接入库 ==================== */
+interface SmartRow {
+  name: string
+  path?: string
+  file?: File
+  state: 'pending' | 'extracting' | 'generating' | 'importing' | 'ok' | 'fail'
+  title?: string
+  streamed?: number
+  error?: string
+}
+
+const smartRows = ref<SmartRow[]>([])
+const smartProject = ref('')
+const smartRunning = ref(false)
+const smartDone = ref(false)
+
+function resetSmart() {
+  smartRows.value = []
+  smartProject.value = ''
+  smartRunning.value = false
+  smartDone.value = false
+}
+
+async function pickSmartPdfs() {
+  const r = await api.pickFiles(['pdf'])
+  if (!r) return
+  const picked = r.paths
+    ? r.paths.map((pth) => ({ name: pth.split(/[\/]/).pop() || pth, path: pth }))
+    : (r.files || []).map((f) => ({ name: f.name, file: f }))
+  const exist = new Set(smartRows.value.map((x) => x.name))
+  smartRows.value.push(...picked.filter((x) => !exist.has(x.name)).map((x) => ({ ...x, state: 'pending' })))
+  smartDone.value = false
+}
+
+function removeSmartRow(i: number) {
+  if (!smartRunning.value) smartRows.value.splice(i, 1)
+}
+
+const SMART_STATE_LABEL: Record<string, string> = {
+  pending: '等待',
+  extracting: '提取文本',
+  generating: 'AI 分析中',
+  importing: '入库',
+  ok: '完成',
+  fail: '失败'
+}
+
+async function smartImportAll() {
+  if (smartRunning.value || smartRows.value.length === 0) return
+  // Key 检查：未配置直接引导
+  try {
+    const cfg = await api.aiGetConfig()
+    if (!cfg.api_key) {
+      ElMessage.warning('请先到「设置与备份 → AI 服务」填写 API Key')
+      return
+    }
+  } catch {
+    /* 取不到配置也放行走后端报错 */
+  }
+  smartRunning.value = true
+  smartDone.value = false
+  let okCount = 0
+  for (const row of smartRows.value) {
+    if (row.state === 'ok') continue
+    try {
+      row.state = 'extracting'
+      const bytes = row.file
+        ? new Uint8Array(await row.file.arrayBuffer())
+        : row.path && api.isTauri
+          ? await api.readBinaryFile(row.path)
+          : null
+      if (!bytes || bytes.length === 0) throw new Error('无法读取 PDF')
+      const pdfjs = await import('pdfjs-dist')
+      const workerMod = await import('pdfjs-dist/build/pdf.worker.min.js?url')
+      pdfjs.GlobalWorkerOptions.workerSrc = workerMod.default
+      const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise
+      const parts: string[] = []
+      for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i)
+        const tc = await page.getTextContent()
+        parts.push('\n[第 ' + i + ' 页]\n' + tc.items.map((it: { str?: string }) => it.str || '').join(' '))
+      }
+      const text = parts.join('\n')
+      if (text.replace(/\s/g, '').length < 200) {
+        throw new Error('PDF 无文本层（疑似扫描版），AI 文本分析暂不支持')
+      }
+      row.state = 'generating'
+      row.streamed = 0
+      const md = await api.aiGenerateAnalysis(text, '', (d) => {
+        row.streamed = (row.streamed || 0) + d.length
+      })
+      // 从生成结果解析元数据（走一次本地解析器的思路：提交时后端会解析；这里前端提取 title 兜底文件名）
+      const titleMatch = md.match(/^title:\s*"(.*)"/m) || md.match(/^title:\s*(.+)$/m)
+      row.title = titleMatch ? titleMatch[1].trim() : row.name.replace(/\.pdf$/i, '')
+      row.state = 'importing'
+      await api.commitImport({
+        temp_token: null,
+        md_text: md,
+        title: row.title,
+        authors: [],
+        year: null,
+        doi: '',
+        tags: [],
+        project: smartProject.value.trim() || null
+      })
+      row.state = 'ok'
+      okCount++
+    } catch (e) {
+      row.state = 'fail'
+      row.error = String((e as Error).message || e)
+    }
+  }
+  smartRunning.value = false
+  smartDone.value = true
+  if (okCount > 0) {
+    toastOk('智能导入完成：' + okCount + ' 篇已入库')
+    await store.refresh()
+    emit('imported')
+  }
+  const fails = smartRows.value.filter((r) => r.state === 'fail')
+  if (fails.length) {
+    ElMessage.error('失败 ' + fails.length + ' 篇：' + fails[0].error)
   }
 }
 
@@ -433,10 +560,87 @@ const DUP_REASON: Record<string, string> = { sha256: '相同 PDF 内容', doi: '
   >
     <div class="dialog-toolbar">
       <el-radio-group v-model="activeTab">
+        <el-radio-button value="smart">智能导入</el-radio-button>
         <el-radio-button value="single">单篇导入</el-radio-button>
         <el-radio-button value="batch">批量导入</el-radio-button>
       </el-radio-group>
       <el-button text :icon="Download" @click="downloadTemplate">下载 AI 分析模板</el-button>
+    </div>
+
+    <!-- ============ 智能导入 ============ -->
+    <div v-if="activeTab === 'smart'">
+      <el-alert
+        type="success"
+        :closable="false"
+        show-icon
+        class="gap"
+        title="选择 PDF 即可：AI 自动提取标题/作者/年份等元数据并生成八栏目分析，直接入库，无需逐步核对。导入后可随时在阅读页编辑。"
+      />
+      <div class="batch-picks">
+        <el-button type="primary" :icon="Document" @click="pickSmartPdfs">
+          选择 PDF 文件
+          <el-tag v-if="smartRows.length" size="small" style="margin-left: 6px">{{ smartRows.length }}</el-tag>
+        </el-button>
+        <span class="batch-spacer"></span>
+        <el-select
+          v-model="smartProject"
+          filterable
+          allow-create
+          default-first-option
+          placeholder="统一归入项目（可选）"
+          clearable
+          style="width: 200px"
+        >
+          <el-option v-for="p in store.projects" :key="p.id" :label="p.name" :value="p.name" />
+        </el-select>
+      </div>
+
+      <el-table v-if="smartRows.length" :data="smartRows" size="small" max-height="260" class="gap">
+        <el-table-column label="文件" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.name }}
+          </template>
+        </el-table-column>
+        <el-table-column label="识别标题" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.title">{{ row.title }}</span>
+            <span v-else class="dim">AI 提取后显示</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态 / 错误" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.state === 'ok' ? 'success' : row.state === 'fail' ? 'danger' : row.state === 'pending' ? 'info' : 'warning'" effect="plain">
+              {{ SMART_STATE_LABEL[row.state] }}{{ row.state === 'generating' && row.streamed ? ' ' + row.streamed : '' }}
+            </el-tag>
+            <span v-if="row.error" class="warn-text" :title="row.error">{{ row.error.slice(0, 60) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column width="60">
+          <template #default="{ $index }">
+            <el-button text type="danger" size="small" :disabled="smartRunning" @click="removeSmartRow($index)">移除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="还没有选择文件" :image-size="70" />
+
+      <div class="actions-row">
+        <template v-if="smartDone && !smartRunning">
+          <span class="dim">
+            完成：成功 {{ smartRows.filter(r => r.state === 'ok').length }} 篇
+            <template v-if="smartRows.some(r => r.state === 'fail')">，失败 {{ smartRows.filter(r => r.state === 'fail').length }} 篇</template>
+          </span>
+        </template>
+        <el-button
+          type="primary"
+          size="large"
+          :icon="MagicStick"
+          :loading="smartRunning"
+          :disabled="smartRows.length === 0"
+          @click="smartImportAll"
+        >
+          {{ smartRunning ? 'AI 处理中…' : '开始智能导入（' + smartRows.length + ' 篇）' }}
+        </el-button>
+      </div>
     </div>
 
     <!-- ============ 单篇 ============ -->
