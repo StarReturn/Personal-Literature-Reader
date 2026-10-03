@@ -160,26 +160,35 @@ export interface AnnotationRect {
   h: number
 }
 
+export interface AnnotationPoint {
+  x: number
+  y: number
+}
+
 export interface PdfAnnotation {
   id: number
   paper_id: string
   page: number
-  kind: 'highlight' | 'rect' | 'note'
+  kind: 'highlight' | 'underline' | 'strike' | 'rect' | 'note' | 'ink'
   rects: AnnotationRect[]
-  color: 'yellow' | 'red' | 'blue' | 'green'
+  strokes?: AnnotationPoint[][]
+  color: string
   text: string
   quote: string
+  tags?: string[]
   created_at: number
   updated_at: number
 }
 
 export interface AnnotationInput {
   page: number
-  kind: 'highlight' | 'rect' | 'note'
+  kind: 'highlight' | 'underline' | 'strike' | 'rect' | 'note' | 'ink'
   rects: AnnotationRect[]
+  strokes?: AnnotationPoint[][]
   color?: string
   text?: string
   quote?: string
+  tags?: string[]
 }
 
 export interface ProjectInfo { id: number; name: string; paper_count: number }
@@ -318,7 +327,7 @@ export const api = {
     return httpJson('POST', `/api/papers/${id}/annotations`, input)
   },
 
-  updateAnnotation(aid: number, patch: { color?: string; text?: string }): Promise<PdfAnnotation> {
+  updateAnnotation(aid: number, patch: { color?: string; text?: string; tags?: string[] }): Promise<PdfAnnotation> {
     if (isTauri) return tauriInvoke('update_annotation', { aid, patch })
     return httpJson('PATCH', `/api/annotations/${aid}`, patch)
   },

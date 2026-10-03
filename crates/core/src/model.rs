@@ -194,18 +194,30 @@ pub struct AnnotationRect {
     pub h: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnnotationPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PdfAnnotation {
     pub id: i64,
     pub paper_id: String,
     pub page: i64,
-    /// highlight（选中文字）| rect（矩形框选）| note（便签）
+    /// highlight | underline | strike | rect | note | ink
     pub kind: String,
     pub rects: Vec<AnnotationRect>,
-    /// yellow | red | blue | green
+    /// 墨迹路径（每笔一条，归一化坐标）；仅 kind=ink 使用
+    #[serde(default)]
+    pub strokes: Vec<Vec<AnnotationPoint>>,
+    /// yellow | red | blue | green | 任意 #rrggbb
     pub color: String,
     pub text: String,
     pub quote: String,
+    /// 注释级标签
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -216,9 +228,13 @@ pub struct AnnotationInput {
     pub page: i64,
     pub kind: String,
     pub rects: Vec<AnnotationRect>,
+    #[serde(default)]
+    pub strokes: Vec<Vec<AnnotationPoint>>,
     pub color: Option<String>,
     pub text: Option<String>,
     pub quote: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -226,6 +242,7 @@ pub struct AnnotationInput {
 pub struct AnnotationPatch {
     pub color: Option<String>,
     pub text: Option<String>,
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

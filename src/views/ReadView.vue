@@ -92,6 +92,7 @@ function pinPos(a: PdfAnnotation): { left: string; top: string } {
 const editing = ref<PdfAnnotation | null>(null)
 const editText = ref('')
 const editColor = ref<string>('yellow')
+const editTags = ref('')
 const editSaving = ref(false)
 const editingOpen = computed({
   get: () => editing.value !== null,
@@ -114,6 +115,7 @@ function openEdit(a: PdfAnnotation) {
   editing.value = a
   editText.value = a.text
   editColor.value = a.color
+  editTags.value = (a.tags || []).join(', ')
 }
 
 async function saveEdit() {
@@ -122,7 +124,8 @@ async function saveEdit() {
   try {
     const updated = await api.updateAnnotation(editing.value.id, {
       color: editColor.value,
-      text: editText.value
+      text: editText.value,
+      tags: editTags.value.split(/[,，]/).map((x) => x.trim()).filter(Boolean)
     })
     const i = annotations.value.findIndex((x) => x.id === updated.id)
     if (i >= 0) annotations.value.splice(i, 1, updated)
@@ -691,6 +694,7 @@ watch(mode, (m) => {
           v-if="pdfDoc"
           ref="readerRef"
           :pdf-doc="pdfDoc"
+          :paper-id="paperId"
           :annotations="annotations"
           :initial-page="pageNum"
           :initial-zoom="zoom"
@@ -699,6 +703,7 @@ watch(mode, (m) => {
           @zoom-change="(z) => (zoom = z)"
           @mode-change="onReaderMode"
           @edit-annotation="openEdit"
+          @annotations-changed="loadAnnotations"
         />
         <div v-else-if="pdfLoading" class="pdf-loading" v-loading="true" element-loading-text="PDF 加载中…" />
         <el-alert
@@ -830,6 +835,13 @@ watch(mode, (m) => {
           ></span>
         </div>
         <el-input v-model="editText" type="textarea" :rows="3" placeholder="备注（可选）：写下你对这段内容的想法…" />
+        <div style="margin-top: 10px">
+          <el-input v-model="editTags" placeholder="注释标签（逗号分隔，可选）：如 存疑 / 待复核 / 关键数据" />
+        </div>
+        <div style="margin-top: 8px">
+          <el-color-picker v-model="editColor" size="small" />
+          <span class="dim-line" style="margin-left: 8px">自定义颜色</span>
+        </div>
       </template>
       <template #footer>
         <el-button type="danger" plain @click="removeEdit">删除</el-button>

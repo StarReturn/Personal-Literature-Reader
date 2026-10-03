@@ -207,6 +207,21 @@ pub(crate) fn migrate(conn: &Connection) -> CoreResult<()> {
         "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')",
         [],
     )?;
+    // 批次2 迁移：注释扩展列（幂等）
+    let cols: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(pdf_annotations)")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        rows.flatten().collect()
+    };
+    if !cols.iter().any(|c| c == "strokes") {
+        conn.execute("ALTER TABLE pdf_annotations ADD COLUMN strokes TEXT", [])?;
+    }
+    if !cols.iter().any(|c| c == "tags") {
+        conn.execute(
+            "ALTER TABLE pdf_annotations ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )?;
+    }
     Ok(())
 }
 
