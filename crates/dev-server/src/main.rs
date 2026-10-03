@@ -74,6 +74,9 @@ async fn main() {
         .route("/api/restore", post(restore))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/template", get(get_template))
+        .route("/api/ai/config", get(get_ai_config).put(put_ai_config))
+        .route("/api/ai/test", post(test_ai))
+        .route("/api/ai/generate-analysis", post(generate_analysis))
         .layer(DefaultBodyLimit::max(512 * 1024 * 1024))
         .with_state(state.clone());
 
@@ -512,6 +515,91 @@ async fn put_settings(
     Ok(Json(SettingsResponse {
         library_dir: dir.to_string_lossy().to_string(),
     }))
+}
+
+// ---------- AI 服务 ----------
+
+async fn get_ai_config(State(state): State<Arc<CoreState>>) -> Json<litreview_core::service::ai::AiConfig> {
+    Json(litreview_core::service::ai::get_config(&state))
+}
+
+async fn put_ai_config(
+    State(state): State<Arc<CoreState>>,
+    Json(cfg): Json<litreview_core::service::ai::AiConfig>,
+) -> ApiResult<Json<litreview_core::service::ai::AiConfig>> {
+    litreview_core::service::ai::set_config(&state, &cfg)?;
+    Ok(Json(cfg))
+}
+
+async fn test_ai(State(state): State<Arc<CoreState>>) -> ApiResult<Response> {
+    let cfg = litreview_core::service::ai::get_config(&state);
+    // 阻塞调用放线程池，避免卡住异步运行时
+    let reply = tokio::task::spawn_blocking(move || {
+        litreview_core::service::ai::test_connection(&cfg)
+    })
+    .await
+    .map_err(|e| ApiError(litreview_core::CoreError::Msg(format!("{e}"))))?
+    .map_err(ApiError)?;
+    Ok(Json(json!({ "ok": true, "reply": reply })).into_response())
+}
+
+#[derive(serde::Deserialize, Default)]
+struct GenAnalysisBody {
+    /// PDF 全文文本（前端 pdf.js 提取）
+    #[serde(default)]
+    pdf_text: String,
+    /// 额外用户要求（可选）
+    #[serde(default)]
+    extra_instructions: String,
+}
+
+/// SSE 流式生成文献分析：data: {"delta": "..."}，结束 data: {"done": true, "full": "..."}
+async fn generate_analysis(
+    State(state): State<Arc<CoreState>>,
+    Json(body): Json<GenAnalysisBody>,
+) -> Response {
+    use futures_util::StreamExt;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(32);
+    tokio::task::spawn_blocking(move || {
+        let cfg = litreview_core::service::ai::get_config(&state);
+        let system = litreview_core::service::ai::analysis_system_prompt();
+        let user = format!(
+            "请分析以下论文全文并按模板输出。{}
+
+=== 论文全文开始 ===
+{}
+=== 论文全文结束 ===",
+            if body.extra_instructions.trim().is_empty() {
+                String::new()
+            } else {
+                format!("
+额外要求：{}", body.extra_instructions.trim())
+            },
+            litreview_core::service::ai::truncate_to_budget(&body.pdf_text, cfg.max_context_tokens)
+        );
+        let tx2 = tx.clone();
+        let result = litreview_core::service::ai::generate_stream(&cfg, &system, &user, &mut |delta| {
+            let payload = format!("data: {}
+
+", json!({ "delta": delta }));
+            let _ = tx2.blocking_send(Ok(axum::body::Bytes::from(payload)));
+        });
+        let tail = match result {
+            Ok(full) => format!("data: {}
+
+", json!({ "done": true, "full": full })),
+            Err(e) => format!("data: {}
+
+", json!({ "error": e.to_string() })),
+        };
+        let _ = tx.blocking_send(Ok(axum::body::Bytes::from(tail)));
+    });
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let body = axum::body::Body::from_stream(stream);
+    (
+        [(header::CONTENT_TYPE, "text/event-stream"), (header::CACHE_CONTROL, "no-cache")],
+        body,
+    ).into_response()
 }
 
 async fn get_template() -> Json<serde_json::Value> {

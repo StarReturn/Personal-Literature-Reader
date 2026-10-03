@@ -15,6 +15,50 @@ const backupDir = ref('')
 const zipPath = ref('')
 const restoreDir = ref('')
 const lastBackup = ref('')
+
+// AI 服务（OpenAI 兼容：智谱 GLM 默认 / DeepSeek / Ollama 均可）
+const aiCfg = ref({
+  base_url: 'https://open.bigmodel.cn/api/paas/v4',
+  api_key: '',
+  model: 'glm-5.3-flash',
+  max_context_tokens: 120000,
+  temperature: 0.3
+})
+const aiTesting = ref(false)
+const aiSaving = ref(false)
+
+async function loadAi() {
+  try {
+    aiCfg.value = await api.aiGetConfig()
+  } catch {
+    /* 使用默认值 */
+  }
+}
+
+async function saveAi() {
+  aiSaving.value = true
+  try {
+    await api.aiSetConfig({ ...aiCfg.value })
+    toastOk('AI 配置已保存（仅存本机）')
+  } catch (e) {
+    toastError(String((e as Error).message || e))
+  } finally {
+    aiSaving.value = false
+  }
+}
+
+async function testAi() {
+  aiTesting.value = true
+  try {
+    await api.aiSetConfig({ ...aiCfg.value })
+    const r = await api.aiTestConnection()
+    toastOk('连接成功，模型回复：' + (r.reply || '').slice(0, 20))
+  } catch (e) {
+    toastError(String((e as Error).message || e))
+  } finally {
+    aiTesting.value = false
+  }
+}
 const activeTheme = ref(getCurrentThemeId())
 
 function onPickTheme(id: string) {
@@ -24,7 +68,10 @@ function onPickTheme(id: string) {
 }
 
 watch(visible, (v) => {
-  if (v) load()
+  if (v) {
+    load()
+    loadAi()
+  }
 })
 
 async function load() {
@@ -146,6 +193,28 @@ async function downloadTemplate() {
     </div>
     <p class="hint">恢复前会校验数据库完整性与 PDF 关联，校验通过才切换到新目录。</p>
 
+        <div class="section-title">AI 服务 <span class="section-sub">OpenAI 兼容：智谱 / DeepSeek / Ollama 均可</span></div>
+    <div class="ai-grid">
+      <el-input v-model="aiCfg.base_url" placeholder="https://open.bigmodel.cn/api/paas/v4">
+        <template #prepend>Base URL</template>
+      </el-input>
+      <el-input v-model="aiCfg.model" placeholder="glm-5.3-flash">
+        <template #prepend>模型</template>
+      </el-input>
+      <el-input v-model="aiCfg.api_key" type="password" show-password placeholder="API Key（仅存本机数据库，不进 git）">
+        <template #prepend>API Key</template>
+      </el-input>
+      <el-input-number v-model="aiCfg.max_context_tokens" :min="8000" :max="1000000" :step="8000" controls-position="right" style="width: 100%" />
+    </div>
+    <div class="ai-actions">
+      <span class="hint" style="flex: 1">
+        上下文预算截断超长论文（默认 12 万 token），避免无关内容污染分析；温度建议 0.1-0.4。
+        默认智谱 GLM-5.3-Flash：0.8 元/百万输入 token。
+      </span>
+      <el-button size="small" :loading="aiSaving" @click="saveAi">保存</el-button>
+      <el-button size="small" type="primary" :loading="aiTesting" @click="testAi">测试连接</el-button>
+    </div>
+
     <div class="section-title">AI 分析模板</div>
     <el-button :icon="Download" @click="downloadTemplate">下载 文献AI分析模板.md</el-button>
     <p v-if="!api.isTauri" class="hint">浏览器模式下目录请输入绝对路径（例如 D:\Backups）。</p>
@@ -156,6 +225,25 @@ async function downloadTemplate() {
 .dir-value {
   font-size: 13px;
   word-break: break-all;
+}
+
+.ai-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.ai-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.ai-actions .hint {
+  margin: 0;
+  max-width: 360px;
 }
 
 .section-title {

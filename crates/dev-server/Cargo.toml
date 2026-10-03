@@ -8,5 +8,7 @@ litreview-core = { path = "../core" }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "tokio", "query"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tower-http = { version = "0.6", features = ["fs"] }
+futures-util = "0.3"
+tokio-stream = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }

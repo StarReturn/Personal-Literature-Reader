@@ -1,0 +1,43 @@
+{
+  "url": "http://127.0.0.1:8787",
+  "capturedAt": "2026-10-01T16:25:42.027Z",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "navigationError": null,
+  "consoleMessages": [],
+  "pageErrors": [],
+  "failedRequests": [],
+  "badResponses": [],
+  "apiResponses": [
+    {
+      "url": "http://127.0.0.1:8787/api/projects",
+      "status": 200,
+      "body": "[{\"id\":1,\"name\":\"Topic A\",\"paper_count\":2},{\"id\":3,\"name\":\"课题二：注意力综述\",\"paper_count\":0}]"
+    },
+    {
+      "url": "http://127.0.0.1:8787/api/tags",
+      "status": 200,
+      "body": "[{\"id\":7,\"name\":\"批注测试\",\"paper_count\":1},{\"id\":5,\"name\":\"批量测试\",\"paper_count\":2}]"
+    },
+    {
+      "url": "http://127.0.0.1:8787/api/compares",
+      "status": 200,
+      "body": "[]"
+    },
+    {
+      "url": "http://127.0.0.1:8787/api/papers?trash=false",
+      "status": 200,
+      "body": "[{\"id\":\"36a7184603df4781a0d6e162a2c44cc3\",\"title\":\"Annotation Test Paper\",\"authors\":[\"Anno\"],\"year\":2026,\"doi\":\"\",\"reading_status\":\"reading\",\"analysis_status\":\"none\",\"analysis_updated_at\":null,\"has_notes\":false,\"tags\":[\"批注测试\"],\"projects\":[],\"pdf_page_count\":6,\"trashed\":false,\"created_at\":1790762995,\"updated_at\":1790871866},{\"id\":\"7656c5dc87894787956a45c60df8bf7f\",\"title\":\"Batch Paper One on Transformers\",\"authors\":[\"Tester A\"],\"year\":2024,\"doi\":\"10.1000/batch-1\",\"reading_status\":\"reading\",\"analy"
+    }
+  ],
+  "dom": {
+    "title": "文献综述中心",
+    "rootChildCount": 2,
+    "horizontalOverflow": false,
+    "scrollWidth": 1440,
+    "clientWidth": 1440,
+    "bodyTextPreview": "文献综述中心 本地文献工作台 全部文献 5 项目 Topic A 2 课题二：注意力综述 0 标签 批注测试 批量测试 已保存对比 勾选文献后可新建对比 回收站 设置与备份 项目 标签 阅读状态 分析状态 导出全部 导出笔记 导入文献 Annotation Test Paper 2026 Anno 阅读中 未导入 批注测试 导入MD 阅读 Batch Paper One on Transformers 2024 Tester A 阅读中 可对比 有笔记 Topic A 批量测试 阅读 测试文献：待补录MD 2025 待阅读 可对比 有笔记 阅读 新文献：还没有分析 2026 待阅读 未导入 导入MD 阅读 Batch Paper Two on Diffusion 2024 Tester A 待阅读 可对比 Topic A 批量测试 阅读"
+  }
+}

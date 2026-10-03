@@ -152,6 +152,12 @@ fn read_text_file(path: String) -> R<String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// 读取对话框选择文件的字节（PDF 文本提取等前端处理用）。
+#[tauri::command]
+fn read_binary_file(path: String) -> R<Vec<u8>> {
+    std::fs::read(&path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn commit_import(state: State<'_, CoreState>, req: CommitRequest) -> R<CommitResult> {
     sv::import::commit_import(&state, &req).map_err(cerr)
@@ -268,6 +274,58 @@ fn delete_annotation(state: State<'_, CoreState>, aid: i64) -> R<()> {
     sv::annotations::delete_annotation(&state, aid).map_err(cerr)
 }
 
+// ---------- AI 服务 ----------
+
+#[tauri::command]
+fn ai_get_config(state: State<'_, CoreState>) -> litreview_core::service::ai::AiConfig {
+    sv::ai::get_config(&state)
+}
+
+#[tauri::command]
+fn ai_set_config(state: State<'_, CoreState>, cfg: litreview_core::service::ai::AiConfig) -> R<()> {
+    sv::ai::set_config(&state, &cfg).map_err(cerr)
+}
+
+#[tauri::command]
+fn ai_test_connection(state: State<'_, CoreState>) -> R<String> {
+    let cfg = sv::ai::get_config(&state);
+    sv::ai::test_connection(&cfg).map_err(cerr)
+}
+
+/// 流式生成文献分析：通过 `ai_chunk` 事件推送增量，返回完整文本。
+#[tauri::command]
+async fn ai_generate_analysis(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<CoreState>>,
+    pdf_text: String,
+    extra_instructions: Option<String>,
+) -> R<String> {
+    use tauri::Emitter;
+    let state: std::sync::Arc<CoreState> = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = sv::ai::get_config(&state);
+        let system = sv::ai::analysis_system_prompt();
+        let extra = extra_instructions.unwrap_or_default();
+        let user = format!(
+            "请分析以下论文全文并按模板输出。{}
+
+=== 论文全文开始 ===
+{}
+=== 论文全文结束 ===",
+            if extra.trim().is_empty() { String::new() } else { format!("
+额外要求：{}", extra.trim()) },
+            sv::ai::truncate_to_budget(&pdf_text, cfg.max_context_tokens)
+        );
+        let app2 = app.clone();
+        sv::ai::generate_stream(&cfg, &system, &user, &mut |delta| {
+            let _ = app2.emit("ai_chunk", delta);
+        })
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("任务执行失败：{e}"))?
+}
+
 #[tauri::command]
 fn get_template() -> serde_json::Value {
     serde_json::json!({
@@ -292,8 +350,10 @@ fn main() {
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
             std::fs::create_dir_all(&data_dir)?;
             std::env::set_var("LITREVIEW_DATA", &data_dir);
-            let lib = litreview_core::db::open_library(None)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            let lib = std::sync::Arc::new(
+                litreview_core::db::open_library(None)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?,
+            );
             app.manage(lib);
 
             // 系统托盘：兔子图标常驻；左键恢复主窗口，右键菜单（打开/退出）
@@ -336,7 +396,7 @@ fn main() {
             list_papers, get_paper, patch_paper, delete_paper, restore_paper, get_pdf,
             get_analysis, set_analysis, restore_prev_analysis, get_note, set_note,
             list_evidence, upsert_evidence, export_paper, export_papers_batch, export_notes_batch, analyze_import, analyze_import_paths,
-            save_text_file, read_text_file, commit_import,
+            save_text_file, read_text_file, read_binary_file, commit_import,
             list_projects, create_project, rename_project, delete_project, list_tags,
             delete_tag, list_compares, create_compare, get_compare, update_compare,
             delete_compare, export_compare, backup, restore, get_settings, switch_library,

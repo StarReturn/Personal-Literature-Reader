@@ -5,3 +5,4 @@ pub mod compares;
 pub mod export;
 pub mod backup;
 pub mod annotations;
+pub mod ai;

@@ -152,6 +152,14 @@ export interface CompareWithStatus extends CompareRecord {
   updated_papers: string[]
 }
 
+export interface AiConfig {
+  base_url: string
+  api_key: string
+  model: string
+  max_context_tokens: number
+  temperature: number
+}
+
 export interface AnnotationRect {
   x: number
   y: number

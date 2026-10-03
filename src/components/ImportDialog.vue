@@ -109,6 +109,62 @@ async function pickMd() {
 
 const canAnalyze = computed(() => Boolean(pdfPath.value || mdPath.value || mdPasted.value.trim()))
 
+/* ---------- AI 生成分析（单篇）：PDF 全文提取 → 流式生成 → 进粘贴框走现有解析管线 ---------- */
+const aiGenerating = ref(false)
+const aiStreamText = ref('')
+const aiExtra = ref('')
+
+async function getPdfBytesForAi(): Promise<Uint8Array | null> {
+  if (pdfFile.value) return new Uint8Array(await pdfFile.value.arrayBuffer())
+  if (pdfPath.value && api.isTauri) return api.readBinaryFile(pdfPath.value)
+  return null
+}
+
+async function extractPdfText(bytes: Uint8Array): Promise<string> {
+  const pdfjs = await import('pdfjs-dist')
+  const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise
+  const parts: string[] = []
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i)
+    const tc = await page.getTextContent()
+    parts.push('\n[第 ' + i + ' 页]\n' + tc.items.map((it: { str?: string }) => it.str || '').join(' '))
+  }
+  return parts.join('\n')
+}
+
+async function aiGenerate() {
+  if (aiGenerating.value) return
+  if (!pdfPath.value) {
+    ElMessage.warning('请先选择 PDF 文件（AI 需要读取全文）')
+    return
+  }
+  aiGenerating.value = true
+  aiStreamText.value = ''
+  showPaste.value = true
+  mdPasted.value = ''
+  try {
+    const bytes = await getPdfBytesForAi()
+    if (!bytes || bytes.length === 0) {
+      ElMessage.warning('无法读取 PDF 内容')
+      return
+    }
+    const text = await extractPdfText(bytes)
+    if (text.replace(/\s/g, '').length < 200) {
+      ElMessage.warning('PDF 几乎无文本层（疑似扫描版）：AI 文本分析暂不支持，可等待后续图片识别支持')
+      return
+    }
+    const full = await api.aiGenerateAnalysis(text, aiExtra.value, (d) => {
+      aiStreamText.value += d
+    })
+    mdPasted.value = full
+    toastOk('AI 分析生成完毕，请核对后点「解析预览」')
+  } catch (e) {
+    toastError(String((e as Error).message || e))
+  } finally {
+    aiGenerating.value = false
+  }
+}
+
 async function analyze() {
   if (!canAnalyze.value) return
   analyzing.value = true
@@ -405,18 +461,42 @@ const DUP_REASON: Record<string, string> = { sha256: '相同 PDF 内容', doi: '
           </div>
         </div>
 
-        <div class="paste-toggle">
-          <el-link type="primary" @click="showPaste = !showPaste">
-            {{ showPaste ? '收起粘贴框' : '没有 MD 文件？直接粘贴分析内容' }}
+        <div class="ai-generate-row">
+          <el-button
+            type="success"
+            :icon="MagicStick"
+            :loading="aiGenerating"
+            :disabled="!pdfPath"
+            @click="aiGenerate"
+          >
+            {{ aiGenerating ? 'AI 分析生成中…' : 'AI 生成分析（读取所选 PDF）' }}
+          </el-button>
+          <el-input
+            v-model="aiExtra"
+            size="small"
+            class="ai-extra"
+            placeholder="额外要求（可选）：如 侧重方法对比 / 用中文输出"
+          />
+          <el-link v-if="!showPaste" type="primary" style="margin-left: 8px" @click="showPaste = !showPaste">
+            手动粘贴 MD
           </el-link>
         </div>
-        <el-input
-          v-if="showPaste"
-          v-model="mdPasted"
-          type="textarea"
-          :rows="6"
-          placeholder="粘贴外部 AI 生成的 Markdown 分析（需符合模板：YAML 元数据 + 八个固定二级标题）"
-        />
+        <div v-if="showPaste || aiGenerating || aiStreamText" class="paste-area-wrap">
+          <el-input
+            v-if="!aiGenerating && !aiStreamText"
+            v-model="mdPasted"
+            type="textarea"
+            :rows="6"
+            placeholder="粘贴外部 AI 生成的 Markdown 分析（需符合模板：YAML 元数据 + 八个固定二级标题）"
+          />
+          <div v-if="aiGenerating || aiStreamText" class="ai-stream">
+            <div class="ai-stream-head">
+              <span v-if="aiGenerating" class="dim"><el-icon class="is-loading"><Loading /></el-icon> 模型正在按模板生成分析…（可随时关闭对话框取消）</span>
+              <span v-else class="dim">生成完成：已填入下方，核对后点「解析预览」</span>
+            </div>
+            <pre class="ai-stream-pre">{{ aiStreamText }}</pre>
+          </div>
+        </div>
 
         <div class="actions-row">
           <el-button type="primary" :icon="UploadFilled" :loading="analyzing" :disabled="!canAnalyze" @click="analyze">
@@ -685,8 +765,40 @@ const DUP_REASON: Record<string, string> = { sha256: '相同 PDF 内容', doi: '
   color: #6a737d;
 }
 
-.paste-toggle {
+.ai-generate-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 12px 0 8px;
+}
+
+.ai-extra {
+  flex: 1;
+  min-width: 200px;
+}
+
+.ai-stream {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 8px 12px;
+}
+
+.ai-stream-head {
+  font-size: 12px;
+  color: #6a737d;
+  margin-bottom: 6px;
+}
+
+.ai-stream-pre {
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  font-family: Consolas, 'Microsoft YaHei', monospace;
 }
 
 .actions-row {
