@@ -12,6 +12,7 @@ import { anchorHash, stripFrontMatter } from '../lib/markdown'
 import { addToBasket } from '../lib/basket'
 import MdRender from '../components/MdRender.vue'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
+import PdfReader from '../components/pdf/PdfReader.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -254,7 +255,6 @@ async function loadPdf() {
     const task = pdfjsLib.getDocument({ data: bytes })
     pdfDoc.value = markRaw(await task.promise)
     if (pageNum.value > pdfDoc.value.numPages) pageNum.value = 1
-    await renderPage()
   } catch (e) {
     const err = e as Error
     pdfError.value = err.message || String(err)
@@ -331,18 +331,30 @@ async function renderTextLayerNow(page: pdfjsLib.PDFPageProxy, viewport: { width
   }
 }
 
+// ---- PdfReader 桥接 ----
+const readerRef = ref<InstanceType<typeof PdfReader> | null>(null)
+const readerMode = ref<'vertical' | 'paged'>('vertical')
+
 function gotoPage(p: number) {
   if (!pdfDoc.value) {
     mode.value = 'pdf'
     toastInfo('PDF 未加载完成，稍后再试')
     return
   }
-  const target = Math.min(Math.max(1, p), pdfDoc.value.numPages)
-  if (target !== p) {
-    toastInfo(`页码超出范围，已跳到第 ${target} 页`)
-  }
-  pageNum.value = target
   if (mode.value === 'md') mode.value = 'split'
+  nextTick(() => readerRef.value?.gotoPage(p))
+}
+
+function onReaderPage(p: number) {
+  pageNum.value = p
+  if (paper.value && paper.value.reading_status === 'to_read') {
+    paper.value.reading_status = 'reading'
+    api.patchPaper(paperId, { reading_status: 'reading' }).catch(() => undefined)
+  }
+}
+
+function onReaderMode(m: 'vertical' | 'paged') {
+  readerMode.value = m
 }
 
 function flipFromScroll(direction: 1 | -1) {
@@ -669,164 +681,34 @@ watch(mode, (m) => {
 
     <!-- 主体 -->
     <div ref="splitContainer" class="read-body">
-      <!-- PDF 侧 -->
+      <!-- PDF 侧（Zotero 式阅读器批次1：连续滚动/翻页 + 懒渲染 + 缩放工具栏） -->
       <section
         v-if="mode !== 'md'"
         class="pdf-pane"
         :style="mode === 'split' ? { flexBasis: `${splitRatio * 100}%` } : { flex: 1 }"
       >
-        <div class="pdf-toolbar">
-          <el-button-group size="small">
-            <el-button :icon="ArrowLeft" :disabled="pageNum <= 1" @click="pageNum--">上一页</el-button>
-            <el-button :icon="ArrowLeft" class="flip-h" :disabled="pageNum >= pageCount" @click="pageNum++">下一页</el-button>
-          </el-button-group>
-          <span class="page-indicator">
-            <el-input-number
-              v-model="pageNum"
-              size="small"
-              :min="1"
-              :max="pageCount || 1"
-              :controls="false"
-              class="page-input"
-            />
-            <span>/ {{ pageCount || '…' }}</span>
-          </span>
-          <el-divider direction="vertical" />
-          <!-- 批注工具：默认关闭，手动开启 -->
-          <el-tooltip content="关闭批注（纯阅读，不响应选中与框选）" placement="bottom" :show-after="400">
-            <el-button
-              size="small"
-              :type="annoTool === 'off' ? 'primary' : ''"
-              :icon="Hide"
-              aria-label="关闭批注"
-              @click="annoTool = 'off'"
-            />
-          </el-tooltip>
-          <el-tooltip content="选择文字（松开鼠标即按当前颜色生成高亮批注）" placement="bottom" :show-after="400">
-            <el-button
-              size="small"
-              :type="annoTool === 'select' ? 'primary' : ''"
-              :icon="SelectTool"
-              aria-label="选择文字工具"
-              @click="annoTool = 'select'"
-            />
-          </el-tooltip>
-          <el-tooltip content="框选标注（在页面上拖拽画框）" placement="bottom" :show-after="400">
-            <el-button
-              size="small"
-              :type="annoTool === 'rect' ? 'primary' : ''"
-              :icon="Crop"
-              aria-label="框选标注工具"
-              @click="annoTool = 'rect'"
-            />
-          </el-tooltip>
-          <span v-if="annoTool !== 'off'" class="color-swatches">
-            <span
-              v-for="c in ANNO_COLORS"
-              :key="c"
-              class="swatch"
-              :class="{ active: annoColor === c }"
-              :style="{ background: COLOR_HEX[c] }"
-              :title="COLOR_TITLE[c]"
-              @click="annoColor = c"
-            ></span>
-          </span>
-          <el-badge :value="annotations.length" :hidden="!annotations.length" :max="99">
-            <el-button size="small" :icon="Memo" @click="showAnnoList = true">批注</el-button>
-          </el-badge>
-          <span class="toolbar-spacer"></span>
-          <el-button-group size="small">
-            <el-button :icon="Minus" :disabled="zoom <= 0.5" @click="zoom = Math.max(0.5, zoom - 0.15)" />
-            <el-button size="small" class="zoom-label">{{ Math.round(zoom * 100) }}%</el-button>
-            <el-button :icon="Plus" :disabled="zoom >= 3" @click="zoom = Math.min(3, zoom + 0.15)" />
-            <el-button :icon="RefreshRight" @click="zoom = 1" />
-          </el-button-group>
-        </div>
-        <div ref="pdfScrollRef" class="pdf-scroll" v-loading="pdfLoading" element-loading-text="PDF 加载中…" @wheel="onPdfWheel" @touchstart="onPdfTouchStart" @touchend="onPdfTouchEnd">
-          <el-alert
-            v-if="pdfError"
-            type="error"
-            :title="`PDF 无法显示：${pdfError}`"
-            :description="paper && !paper.pdf_sha256 ? '（该文献未关联 PDF，可从导入页补传）' : ''"
-            show-icon
-            :closable="false"
-            class="pdf-error-box"
-          />
-          <div
-            v-show="!pdfError"
-            ref="pdfStageRef"
-            class="pdf-stage"
-            :class="{ 'tool-rect': annoTool === 'rect', 'anno-off': annoTool === 'off' }"
-            @mouseup="captureSelection"
-          >
-            <canvas ref="canvasRef" class="pdf-canvas"></canvas>
-            <div ref="textLayerRef" class="textLayer"></div>
-            <!-- 批注层：选择模式穿透（元素自身可点编辑）；矩形模式整层拦截 -->
-            <svg
-              class="anno-layer"
-              :width="canvasW"
-              :height="canvasH"
-              :viewBox="`0 0 ${canvasW} ${canvasH}`"
-              @mousedown="onAnnoLayerMouseDown"
-            >
-              <g v-for="a in pageAnnotations" :key="a.id">
-                <rect
-                  v-for="(r, ri) in a.rects"
-                  :key="ri"
-                  :x="r.x * canvasW"
-                  :y="r.y * canvasH"
-                  :width="r.w * canvasW"
-                  :height="r.h * canvasH"
-                  :fill="COLOR_HEX[a.color] || COLOR_HEX.yellow"
-                  fill-opacity="0.42"
-                  class="anno-rect"
-                  @mouseenter="showTip(a, $event)"
-                  @mousemove="showTip(a, $event)"
-                  @mouseleave="hoverTip = null"
-                  @click.stop="openEdit(a)"
-                />
-              </g>
-              <rect
-                v-if="drawing"
-                :x="drawing.x * canvasW"
-                :y="drawing.y * canvasH"
-                :width="drawing.w * canvasW"
-                :height="drawing.h * canvasH"
-                :fill="COLOR_HEX[annoColor]"
-                fill-opacity="0.25"
-                :stroke="COLOR_HEX[annoColor]"
-                stroke-dasharray="4 3"
-              />
-            </svg>
-
-            <!-- 常显便签：有备注的批注直接显示在标注旁边 -->
-            <div
-              v-for="a in pageAnnotations.filter((x) => x.text)"
-              :key="'pin' + a.id"
-              class="anno-pin"
-              :style="[pinPos(a), { borderColor: COLOR_HEX[a.color] }]"
-              title="点击编辑批注"
-              @click="openEdit(a)"
-            >
-              <span class="pin-dot" :style="{ background: COLOR_HEX[a.color] }"></span>
-              <span class="pin-text">{{ a.text }}</span>
-            </div>
-
-            <!-- 悬停信息卡 -->
-            <div
-              v-if="hoverTip"
-              class="anno-tip"
-              :style="{ left: `${Math.min(hoverTip.x, canvasW - 200)}px`, top: `${hoverTip.y}px` }"
-            >
-              <div class="tip-head">
-                {{ KIND_LABEL[hoverTip.anno.kind] }} · {{ COLOR_TITLE[hoverTip.anno.color] || hoverTip.anno.color }} · 第 {{ hoverTip.anno.page }} 页
-              </div>
-              <div v-if="hoverTip.anno.text" class="tip-main">{{ hoverTip.anno.text }}</div>
-              <div v-if="hoverTip.anno.quote" class="tip-quote">"{{ hoverTip.anno.quote }}"</div>
-              <div class="tip-hint">点击标注可编辑/删除</div>
-            </div>
-          </div>
-        </div>
+        <PdfReader
+          v-if="pdfDoc"
+          ref="readerRef"
+          :pdf-doc="pdfDoc"
+          :annotations="annotations"
+          :initial-page="pageNum"
+          :initial-zoom="zoom"
+          :initial-mode="readerMode"
+          @page-change="onReaderPage"
+          @zoom-change="(z) => (zoom = z)"
+          @mode-change="onReaderMode"
+          @edit-annotation="openEdit"
+        />
+        <div v-else-if="pdfLoading" class="pdf-loading" v-loading="true" element-loading-text="PDF 加载中…" />
+        <el-alert
+          v-else-if="pdfError"
+          type="error"
+          :title="`PDF 无法显示：${pdfError}`"
+          show-icon
+          :closable="false"
+          class="pdf-error-box"
+        />
       </section>
 
       <!-- 拖拽分隔条 -->

@@ -1,4 +1,6 @@
-# 文献综述中心
+# Litwright · 文献综述中心
+
+> Litwright = literature + wright（匠）：文献匠——个人本地文献阅读与对比工作台。
 
 个人本地文献阅读与对比工作台。外部 AI 按固定模板生成分析 Markdown，本应用负责 PDF+MD 配对导入、SQLite 归档、PDF 分栏阅读、2～5 篇结构化对比、个人笔记与综合结论，全部数据存放本机。
 
