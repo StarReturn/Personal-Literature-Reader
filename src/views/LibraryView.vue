@@ -400,8 +400,8 @@ async function removeTag(id: number, name: string) {
       <div class="brand">
         <div class="brand-logo"><img :src="logoUrl" alt="文献综述中心" /></div>
         <div class="brand-text">
-          <div class="brand-name">文献综述中心</div>
-          <div class="brand-sub">本地文献工作台</div>
+          <div class="brand-name">Litwright</div>
+          <div class="brand-sub">文献综述中心 · 本地工作台</div>
         </div>
       </div>
 
