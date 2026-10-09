@@ -178,6 +178,71 @@ pub fn generate_stream(
     Ok(full)
 }
 
+/// 组会汇报大纲系统提示词：输入多篇文献的结构化分析，输出 Markdown 大纲。
+/// 大纲中留有 [编辑位] 让用户填自己本周的工作描述。
+pub fn outline_system_prompt() -> String {
+    let mut rules = String::new();
+    rules.push_str("你是一名学术研究组会汇报助手。根据用户提供的多篇文献分析数据，生成一份可直接用于组会汇报的 Markdown 大纲。
+
+");
+    rules.push_str("硬性规则：
+
+");
+    rules.push_str("1. 按以下固定结构输出（二级标题），可根据内容微调标题但保持逻辑顺序：
+");
+    rules.push_str("   ## 研究背景
+   ## 文献综述（按主题分组，非逐篇罗列）
+   ## 方法对比
+   ## 主要发现
+   ## 共识与分歧
+   ## 研究空白与下一步
+   ## 个人工作总结
+   ## 讨论与建议
+
+");
+    rules.push_str("2. 「个人工作总结」是用户的编辑位：AI 只写一行占位提示（如：[请描述本周实验进展/阅读心得/遇到的问题]），不替用户编造内容。
+
+");
+    rules.push_str("3. 每条要点后用 `（来源：文献编号）` 标注来源，编号在末尾参考文献列表定义。
+
+");
+    rules.push_str("4. 文献综述按主题/方法分组讨论，不要逐篇流水账。
+
+");
+    rules.push_str("5. 控制在 15-25 页当量的大纲（每个二级标题下 3-8 条要点）。
+
+");
+    rules.push_str("6. 末尾附「参考文献」列表：编号 + 标题 + 作者 + 年份。
+
+");
+    rules.push_str("7. 用 Markdown 输出，不要包在代码块中。");
+    rules
+}
+
+pub fn build_outline_prompt(papers: &[(String, String)], extra: &str) -> String {
+    let mut out = String::from("请根据以下文献分析数据生成组会汇报大纲。
+
+");
+    for (i, (title, analysis_md)) in papers.iter().enumerate() {
+        out.push_str(&format!("
+---
+### 文献 [{}]：{}
+{}
+", i + 1, title, analysis_md));
+    }
+    out.push_str("
+---
+");
+    if !extra.trim().is_empty() {
+        out.push_str(&format!("
+用户补充说明：{}
+", extra.trim()));
+    }
+    out.push_str("
+请生成完整的组会汇报大纲。");
+    out
+}
+
 /// 测试连接：发一个极小请求验证配置可用。
 pub fn test_connection(cfg: &AiConfig) -> CoreResult<String> {
     let mut out = String::new();

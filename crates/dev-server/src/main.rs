@@ -77,6 +77,7 @@ async fn main() {
         .route("/api/ai/config", get(get_ai_config).put(put_ai_config))
         .route("/api/ai/test", post(test_ai))
         .route("/api/ai/generate-analysis", post(generate_analysis))
+        .route("/api/ai/generate-outline", post(generate_outline))
         .layer(DefaultBodyLimit::max(512 * 1024 * 1024))
         .with_state(state.clone());
 
@@ -579,6 +580,76 @@ async fn generate_analysis(
         );
         let tx2 = tx.clone();
         let result = litreview_core::service::ai::generate_stream(&cfg, &system, &user, &mut |delta| {
+            let payload = format!("data: {}
+
+", json!({ "delta": delta }));
+            let _ = tx2.blocking_send(Ok(axum::body::Bytes::from(payload)));
+        });
+        let tail = match result {
+            Ok(full) => format!("data: {}
+
+", json!({ "done": true, "full": full })),
+            Err(e) => format!("data: {}
+
+", json!({ "error": e.to_string() })),
+        };
+        let _ = tx.blocking_send(Ok(axum::body::Bytes::from(tail)));
+    });
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let body = axum::body::Body::from_stream(stream);
+    (
+        [(header::CONTENT_TYPE, "text/event-stream"), (header::CACHE_CONTROL, "no-cache")],
+        body,
+    ).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct OutlineBody {
+    /// 文献 ID 列表（服务端自行获取标题和分析内容）
+    paper_ids: Vec<String>,
+    #[serde(default)]
+    extra: String,
+}
+
+/// SSE 流式生成组会大纲
+async fn generate_outline(
+    State(state): State<Arc<CoreState>>,
+    Json(body): Json<OutlineBody>,
+) -> Response {
+    use futures_util::StreamExt;
+    // 获取各篇的标题+分析内容
+    let mut papers: Vec<(String, String)> = Vec::new();
+    for pid in &body.paper_ids {
+        let detail = match sv::papers::get_paper(&state, pid) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let analysis = sv::import::get_analysis(&state, pid)
+            .ok()
+            .flatten()
+            .map(|a| a.md_content)
+            .unwrap_or_default();
+        if analysis.is_empty() {
+            continue;
+        }
+        // 截断每篇到预算的均分（防单篇占满）
+        let per = 8000; // 每篇约 8k token 的分析内容
+        let truncated = sv::ai::truncate_to_budget(&analysis, per);
+        papers.push((detail.item.title.clone(), truncated));
+    }
+    if papers.is_empty() {
+        return ApiError(litreview_core::CoreError::Msg(
+            "所选文献均无 AI 分析内容，请先导入或生成分析".into(),
+        )).into_response();
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(32);
+    tokio::task::spawn_blocking(move || {
+        let cfg = sv::ai::get_config(&state);
+        let system = sv::ai::outline_system_prompt();
+        let user = sv::ai::build_outline_prompt(&papers, &body.extra);
+        let tx2 = tx.clone();
+        let result = sv::ai::generate_stream(&cfg, &system, &user, &mut |delta| {
             let payload = format!("data: {}
 
 ", json!({ "delta": delta }));

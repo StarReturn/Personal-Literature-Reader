@@ -533,6 +533,69 @@ export const api = {
     return httpJson('GET', '/api/template')
   },
 
+  /** 流式生成组会汇报大纲：多篇文献分析 → Markdown 大纲（含编辑位）。 */
+  async aiGenerateOutline(
+    paperIds: string[],
+    extra: string,
+    onDelta?: (delta: string) => void
+  ): Promise<string> {
+    if (isTauri) {
+      const { listen } = await import('@tauri-apps/api/event')
+      let unListen: (() => void) | null = null
+      try {
+        unListen = await listen<string>('ai_chunk', (e) => {
+          onDelta?.(e.payload)
+        })
+        return await tauriInvoke<string>('ai_generate_outline', {
+          paperIds,
+          extra: extra || null
+        })
+      } finally {
+        unListen?.()
+      }
+    }
+    const res = await fetch('/api/ai/generate-outline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paper_ids: paperIds, extra })
+    })
+    if (!res.ok || !res.body) {
+      const errText = await res.text().catch(() => '')
+      throw new Error('大纲生成失败 ' + res.status + ' ' + errText.slice(0, 120))
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let full = ''
+    let done = false
+    while (!done) {
+      const { done: rdDone, value } = await reader.read()
+      if (rdDone) break
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() || ''
+      for (const part of parts) {
+        const line = part.trim()
+        if (!line.startsWith('data:')) continue
+        try {
+          const v = JSON.parse(line.slice(5).trim())
+          if (v.error) throw new Error(v.error)
+          if (v.done) {
+            done = true
+            full = v.full
+          } else if (v.delta) {
+            full += v.delta
+            onDelta?.(v.delta)
+          }
+        } catch (e) {
+          if (e instanceof SyntaxError) continue
+          throw e
+        }
+      }
+    }
+    return full
+  },
+
   // ---------- 桌宠（仅桌面 Tauri 模式） ----------
   async petGetConfig(): Promise<{ enabled: boolean; has_image: boolean; image_name: string } | null> {
     if (!isTauri) return null

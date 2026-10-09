@@ -15,6 +15,7 @@ import {
   FolderOpened,
   Histogram,
   Loading,
+  MagicStick,
   MoreFilled,
   Plus,
   Promotion,

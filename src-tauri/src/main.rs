@@ -326,6 +326,51 @@ async fn ai_generate_analysis(
     .map_err(|e| format!("任务执行失败：{e}"))?
 }
 
+/// 流式生成组会大纲：ai_chunk 事件推送增量，返回完整 Markdown。
+#[tauri::command]
+async fn ai_generate_outline(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<CoreState>>,
+    paper_ids: Vec<String>,
+    extra: Option<String>,
+) -> R<String> {
+    use tauri::Emitter;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut papers: Vec<(String, String)> = Vec::new();
+        for pid in &paper_ids {
+            let detail = match sv::papers::get_paper(&state, pid) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let analysis = sv::import::get_analysis(&state, pid)
+                .ok()
+                .flatten()
+                .map(|a| a.md_content)
+                .unwrap_or_default();
+            if analysis.is_empty() {
+                continue;
+            }
+            let per = 8000;
+            let truncated = sv::ai::truncate_to_budget(&analysis, per);
+            papers.push((detail.item.title.clone(), truncated));
+        }
+        if papers.is_empty() {
+            return Err("所选文献均无 AI 分析内容，请先导入或生成分析".to_string());
+        }
+        let cfg = sv::ai::get_config(&state);
+        let system = sv::ai::outline_system_prompt();
+        let user = sv::ai::build_outline_prompt(&papers, &extra.unwrap_or_default());
+        let app2 = app.clone();
+        sv::ai::generate_stream(&cfg, &system, &user, &mut |delta| {
+            let _ = app2.emit("ai_chunk", delta);
+        })
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("任务执行失败：{e}"))?
+}
+
 #[tauri::command]
 fn get_template() -> serde_json::Value {
     serde_json::json!({
