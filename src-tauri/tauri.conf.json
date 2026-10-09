@@ -12,12 +12,14 @@
   "app": {
     "windows": [
       {
-        "title": "文献综述中心",
+        "title": "Litwright · 文献综述中心",
         "width": 1440,
         "height": 920,
         "minWidth": 1024,
         "minHeight": 700,
-        "center": true
+        "center": true,
+        "label": "main",
+        "visible": true
       }
     ],
     "security": {

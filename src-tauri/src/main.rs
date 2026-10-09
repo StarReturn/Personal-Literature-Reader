@@ -26,22 +26,22 @@ fn cerr(e: litreview_core::CoreError) -> String {
 }
 
 #[tauri::command]
-fn list_papers(state: State<'_, CoreState>, query: ListQuery) -> R<Vec<PaperListItem>> {
+fn list_papers(state: State<'_, std::sync::Arc<CoreState>>, query: ListQuery) -> R<Vec<PaperListItem>> {
     sv::papers::list_papers(&state, &query).map_err(cerr)
 }
 
 #[tauri::command]
-fn get_paper(state: State<'_, CoreState>, id: String) -> R<PaperDetail> {
+fn get_paper(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<PaperDetail> {
     sv::papers::get_paper(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
-fn patch_paper(state: State<'_, CoreState>, id: String, patch: PatchPaper) -> R<PaperDetail> {
+fn patch_paper(state: State<'_, std::sync::Arc<CoreState>>, id: String, patch: PatchPaper) -> R<PaperDetail> {
     sv::papers::patch_paper(&state, &id, &patch).map_err(cerr)
 }
 
 #[tauri::command]
-fn delete_paper(state: State<'_, CoreState>, id: String, permanent: bool) -> R<()> {
+fn delete_paper(state: State<'_, std::sync::Arc<CoreState>>, id: String, permanent: bool) -> R<()> {
     if permanent {
         sv::papers::delete_paper_permanent(&state, &id).map_err(cerr)
     } else {
@@ -50,49 +50,49 @@ fn delete_paper(state: State<'_, CoreState>, id: String, permanent: bool) -> R<(
 }
 
 #[tauri::command]
-fn restore_paper(state: State<'_, CoreState>, id: String) -> R<()> {
+fn restore_paper(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<()> {
     sv::papers::restore_paper(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
-fn get_pdf(state: State<'_, CoreState>, id: String) -> R<Response> {
+fn get_pdf(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<Response> {
     let bytes = sv::import::get_pdf_bytes(&state, &id).map_err(cerr)?;
     Ok(Response::new(bytes))
 }
 
 #[tauri::command]
-fn get_analysis(state: State<'_, CoreState>, id: String) -> R<Option<AnalysisResponse>> {
+fn get_analysis(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<Option<AnalysisResponse>> {
     sv::import::get_analysis(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
-fn set_analysis(state: State<'_, CoreState>, id: String, md: String) -> R<AnalysisResponse> {
+fn set_analysis(state: State<'_, std::sync::Arc<CoreState>>, id: String, md: String) -> R<AnalysisResponse> {
     sv::import::set_analysis(&state, &id, &md).map_err(cerr)
 }
 
 #[tauri::command]
-fn restore_prev_analysis(state: State<'_, CoreState>, id: String) -> R<AnalysisResponse> {
+fn restore_prev_analysis(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<AnalysisResponse> {
     sv::import::restore_prev_analysis(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
-fn get_note(state: State<'_, CoreState>, id: String) -> R<NoteResponse> {
+fn get_note(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<NoteResponse> {
     sv::papers::get_note(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
-fn set_note(state: State<'_, CoreState>, id: String, content: String) -> R<NoteResponse> {
+fn set_note(state: State<'_, std::sync::Arc<CoreState>>, id: String, content: String) -> R<NoteResponse> {
     sv::papers::set_note(&state, &id, &content).map_err(cerr)
 }
 
 #[tauri::command]
-fn list_evidence(state: State<'_, CoreState>, id: String) -> R<Vec<EvidenceRecord>> {
+fn list_evidence(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<Vec<EvidenceRecord>> {
     sv::import::list_evidence(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
 fn upsert_evidence(
-    state: State<'_, CoreState>,
+    state: State<'_, std::sync::Arc<CoreState>>,
     id: String,
     input: EvidenceInput,
 ) -> R<EvidenceRecord> {
@@ -100,23 +100,23 @@ fn upsert_evidence(
 }
 
 #[tauri::command]
-fn export_paper(state: State<'_, CoreState>, id: String, include_notes: bool) -> R<ExportResult> {
+fn export_paper(state: State<'_, std::sync::Arc<CoreState>>, id: String, include_notes: bool) -> R<ExportResult> {
     sv::export::export_paper(&state, &id, include_notes).map_err(cerr)
 }
 
 #[tauri::command]
-fn export_papers_batch(state: State<'_, CoreState>, ids: Vec<String>) -> R<ExportResult> {
+fn export_papers_batch(state: State<'_, std::sync::Arc<CoreState>>, ids: Vec<String>) -> R<ExportResult> {
     sv::export::export_papers_batch(&state, &ids).map_err(cerr)
 }
 
 #[tauri::command]
-fn export_notes_batch(state: State<'_, CoreState>, ids: Vec<String>) -> R<ExportResult> {
+fn export_notes_batch(state: State<'_, std::sync::Arc<CoreState>>, ids: Vec<String>) -> R<ExportResult> {
     sv::export::export_notes_batch(&state, &ids).map_err(cerr)
 }
 
 #[tauri::command]
 fn analyze_import(
-    state: State<'_, CoreState>,
+    state: State<'_, std::sync::Arc<CoreState>>,
     pdf: Option<Vec<u8>>,
     pdf_filename: Option<String>,
     md_text: Option<String>,
@@ -126,7 +126,7 @@ fn analyze_import(
 
 #[tauri::command]
 fn analyze_import_paths(
-    state: State<'_, CoreState>,
+    state: State<'_, std::sync::Arc<CoreState>>,
     pdf_path: Option<String>,
     md_path: Option<String>,
     md_text: Option<String>,
@@ -159,77 +159,77 @@ fn read_binary_file(path: String) -> R<Vec<u8>> {
 }
 
 #[tauri::command]
-fn commit_import(state: State<'_, CoreState>, req: CommitRequest) -> R<CommitResult> {
+fn commit_import(state: State<'_, std::sync::Arc<CoreState>>, req: CommitRequest) -> R<CommitResult> {
     sv::import::commit_import(&state, &req).map_err(cerr)
 }
 
 #[tauri::command]
-fn list_projects(state: State<'_, CoreState>) -> R<Vec<ProjectInfo>> {
+fn list_projects(state: State<'_, std::sync::Arc<CoreState>>) -> R<Vec<ProjectInfo>> {
     sv::taxonomy::list_projects(&state).map_err(cerr)
 }
 
 #[tauri::command]
-fn create_project(state: State<'_, CoreState>, name: String) -> R<ProjectInfo> {
+fn create_project(state: State<'_, std::sync::Arc<CoreState>>, name: String) -> R<ProjectInfo> {
     sv::taxonomy::create_project(&state, &name).map_err(cerr)
 }
 
 #[tauri::command]
-fn rename_project(state: State<'_, CoreState>, id: i64, name: String) -> R<()> {
+fn rename_project(state: State<'_, std::sync::Arc<CoreState>>, id: i64, name: String) -> R<()> {
     sv::taxonomy::rename_project(&state, id, &name).map_err(cerr)
 }
 
 #[tauri::command]
-fn delete_project(state: State<'_, CoreState>, id: i64) -> R<()> {
+fn delete_project(state: State<'_, std::sync::Arc<CoreState>>, id: i64) -> R<()> {
     sv::taxonomy::delete_project(&state, id).map_err(cerr)
 }
 
 #[tauri::command]
-fn list_tags(state: State<'_, CoreState>) -> R<Vec<TagInfo>> {
+fn list_tags(state: State<'_, std::sync::Arc<CoreState>>) -> R<Vec<TagInfo>> {
     sv::taxonomy::list_tags(&state).map_err(cerr)
 }
 
 #[tauri::command]
-fn delete_tag(state: State<'_, CoreState>, id: i64) -> R<()> {
+fn delete_tag(state: State<'_, std::sync::Arc<CoreState>>, id: i64) -> R<()> {
     sv::taxonomy::delete_tag(&state, id).map_err(cerr)
 }
 
 #[tauri::command]
-fn list_compares(state: State<'_, CoreState>) -> R<Vec<CompareRecord>> {
+fn list_compares(state: State<'_, std::sync::Arc<CoreState>>) -> R<Vec<CompareRecord>> {
     sv::compares::list_compares(&state).map_err(cerr)
 }
 
 #[tauri::command]
-fn create_compare(state: State<'_, CoreState>, input: CompareInput) -> R<CompareRecord> {
+fn create_compare(state: State<'_, std::sync::Arc<CoreState>>, input: CompareInput) -> R<CompareRecord> {
     sv::compares::create_compare(&state, &input).map_err(cerr)
 }
 
 #[tauri::command]
-fn get_compare(state: State<'_, CoreState>, id: String) -> R<CompareWithStatus> {
+fn get_compare(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<CompareWithStatus> {
     sv::compares::get_compare(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
-fn update_compare(state: State<'_, CoreState>, id: String, input: CompareInput) -> R<CompareRecord> {
+fn update_compare(state: State<'_, std::sync::Arc<CoreState>>, id: String, input: CompareInput) -> R<CompareRecord> {
     sv::compares::update_compare(&state, &id, &input).map_err(cerr)
 }
 
 #[tauri::command]
-fn delete_compare(state: State<'_, CoreState>, id: String) -> R<()> {
+fn delete_compare(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<()> {
     sv::compares::delete_compare(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
-fn export_compare(state: State<'_, CoreState>, id: String) -> R<ExportResult> {
+fn export_compare(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<ExportResult> {
     sv::export::export_compare(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
-fn backup(state: State<'_, CoreState>, target_dir: String) -> R<BackupResult> {
+fn backup(state: State<'_, std::sync::Arc<CoreState>>, target_dir: String) -> R<BackupResult> {
     sv::backup::backup_to(&state, &PathBuf::from(target_dir)).map_err(cerr)
 }
 
 #[tauri::command]
-fn restore(state: State<'_, CoreState>, zip_path: String, target_dir: Option<String>) -> R<RestoreResult> {
+fn restore(state: State<'_, std::sync::Arc<CoreState>>, zip_path: String, target_dir: Option<String>) -> R<RestoreResult> {
     let target = match target_dir {
         Some(t) if !t.trim().is_empty() => PathBuf::from(t),
         _ => {
@@ -241,7 +241,7 @@ fn restore(state: State<'_, CoreState>, zip_path: String, target_dir: Option<Str
 }
 
 #[tauri::command]
-fn get_settings(state: State<'_, CoreState>) -> R<SettingsResponse> {
+fn get_settings(state: State<'_, std::sync::Arc<CoreState>>) -> R<SettingsResponse> {
     let dir = state.inner.lock().unwrap().library_dir.clone();
     Ok(SettingsResponse {
         library_dir: dir.to_string_lossy().to_string(),
@@ -249,45 +249,45 @@ fn get_settings(state: State<'_, CoreState>) -> R<SettingsResponse> {
 }
 
 #[tauri::command]
-fn switch_library(state: State<'_, CoreState>, library_dir: String) -> R<SettingsResponse> {
+fn switch_library(state: State<'_, std::sync::Arc<CoreState>>, library_dir: String) -> R<SettingsResponse> {
     sv::backup::switch_library(&state, &PathBuf::from(&library_dir)).map_err(cerr)?;
     Ok(SettingsResponse { library_dir })
 }
 
 #[tauri::command]
-fn list_annotations(state: State<'_, CoreState>, id: String) -> R<Vec<PdfAnnotation>> {
+fn list_annotations(state: State<'_, std::sync::Arc<CoreState>>, id: String) -> R<Vec<PdfAnnotation>> {
     sv::annotations::list_annotations(&state, &id).map_err(cerr)
 }
 
 #[tauri::command]
-fn add_annotation(state: State<'_, CoreState>, id: String, input: AnnotationInput) -> R<PdfAnnotation> {
+fn add_annotation(state: State<'_, std::sync::Arc<CoreState>>, id: String, input: AnnotationInput) -> R<PdfAnnotation> {
     sv::annotations::add_annotation(&state, &id, &input).map_err(cerr)
 }
 
 #[tauri::command]
-fn update_annotation(state: State<'_, CoreState>, aid: i64, patch: AnnotationPatch) -> R<PdfAnnotation> {
+fn update_annotation(state: State<'_, std::sync::Arc<CoreState>>, aid: i64, patch: AnnotationPatch) -> R<PdfAnnotation> {
     sv::annotations::update_annotation(&state, aid, &patch).map_err(cerr)
 }
 
 #[tauri::command]
-fn delete_annotation(state: State<'_, CoreState>, aid: i64) -> R<()> {
+fn delete_annotation(state: State<'_, std::sync::Arc<CoreState>>, aid: i64) -> R<()> {
     sv::annotations::delete_annotation(&state, aid).map_err(cerr)
 }
 
 // ---------- AI 服务 ----------
 
 #[tauri::command]
-fn ai_get_config(state: State<'_, CoreState>) -> litreview_core::service::ai::AiConfig {
+fn ai_get_config(state: State<'_, std::sync::Arc<CoreState>>) -> litreview_core::service::ai::AiConfig {
     sv::ai::get_config(&state)
 }
 
 #[tauri::command]
-fn ai_set_config(state: State<'_, CoreState>, cfg: litreview_core::service::ai::AiConfig) -> R<()> {
+fn ai_set_config(state: State<'_, std::sync::Arc<CoreState>>, cfg: litreview_core::service::ai::AiConfig) -> R<()> {
     sv::ai::set_config(&state, &cfg).map_err(cerr)
 }
 
 #[tauri::command]
-fn ai_test_connection(state: State<'_, CoreState>) -> R<String> {
+fn ai_test_connection(state: State<'_, std::sync::Arc<CoreState>>) -> R<String> {
     let cfg = sv::ai::get_config(&state);
     sv::ai::test_connection(&cfg).map_err(cerr)
 }
