@@ -207,10 +207,6 @@ async function downloadTemplate() {
       <el-input-number v-model="aiCfg.max_context_tokens" :min="8000" :max="1000000" :step="8000" controls-position="right" style="width: 100%" />
     </div>
     <div class="ai-actions">
-      <span class="hint" style="flex: 1">
-        上下文预算截断超长论文（默认 12 万 token），避免无关内容污染分析；温度建议 0.1-0.4。
-        默认智谱 GLM-5.3-Flash：0.8 元/百万输入 token。
-      </span>
       <el-button size="small" :loading="aiSaving" @click="saveAi">保存</el-button>
       <el-button size="small" type="primary" :loading="aiTesting" @click="testAi">测试连接</el-button>
     </div>

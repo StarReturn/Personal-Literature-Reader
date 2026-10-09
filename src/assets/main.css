@@ -172,3 +172,13 @@ body {
   overflow-y: hidden;
   padding: 2px 0;
 }
+
+/* 隐藏对话框右侧滚动条（滚轮仍可滚动） */
+.el-overlay-dialog {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.el-overlay-dialog::-webkit-scrollbar {
+  display: none;
+}
